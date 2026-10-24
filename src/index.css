@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+:root {
+  --font-display: 'Plus Jakarta Sans', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+/* 1. DARK THEME */
+:root[data-theme="dark"] {
+  --bg-canvas: #0b0f19;
+  --bg-surface: #111827;
+  --bg-surface-hover: #1f2937;
+  --border-subtle: #374151;
+  --border-strong: #4b5563;
+  --accent-primary: #3b82f6;
+  --accent-primary-hover: #2563eb;
+  --accent-secondary: #10b981;
+  --text-main: #f9fafb;
+  --text-muted: #9ca3af;
+  --theme-font: 'Plus Jakarta Sans', system-ui, sans-serif;
+  --select-bg: #111827;
+  --select-text: #f9fafb;
+  --badge-glow: 0 0 10px rgba(59, 130, 246, 0.25);
+}
+
+/* 2. LIGHT THEME */
+:root[data-theme="light"] {
+  --bg-canvas: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #f1f5f9;
+  --border-subtle: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --accent-primary: #2563eb;
+  --accent-primary-hover: #1d4ed8;
+  --accent-secondary: #059669;
+  --text-main: #0f172a;
+  --text-muted: #64748b;
+  --theme-font: 'Plus Jakarta Sans', system-ui, sans-serif;
+  --select-bg: #ffffff;
+  --select-text: #0f172a;
+  --badge-glow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+body {
+  background-color: var(--bg-canvas);
+  color: var(--text-main);
+  font-family: var(--theme-font);
+  transition: background-color 0.2s ease, color 0.2s ease;
+  min-height: 100vh;
+}
+
+/* Fix dropdown options background in Light and Dark modes */
+select {
+  background-color: var(--select-bg) !important;
+  color: var(--select-text) !important;
+}
+
+select option {
+  background-color: var(--select-bg) !important;
+  color: var(--select-text) !important;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-primary);
+}
+
+/* Burning quest solid pulse indicator */
+@keyframes urgentPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.2);
+  }
+}
+
+.burning-glow {
+  animation: urgentPulse 2s infinite ease-in-out;
+}
+
+/* Floating EXP badge */
+@keyframes floatUpFade {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.95);
+  }
+  20% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  80% {
+    opacity: 1;
+    transform: translateY(-12px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-24px) scale(0.95);
+  }
+}
+
+.exp-float-anim {
+  animation: floatUpFade 1.6s forwards ease-out;
+}

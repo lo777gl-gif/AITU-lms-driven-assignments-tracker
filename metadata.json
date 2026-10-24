@@ -1,0 +1,6 @@
+{
+  "name": "QuestLog RPG: Moodle Academic Task Tracker",
+  "description": "Геймифицированный RPG таск-трекер для студента с автоматическим импортом дедлайнов из календаря Moodle (.ics), прокачкой навыков и уровня персонажа.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
