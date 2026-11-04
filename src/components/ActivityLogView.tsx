@@ -1,6 +1,6 @@
 import React from 'react';
 import { ActivityLogItem } from '../types';
-import { Shield, Zap, CheckCircle2, Award, RefreshCw, Trash2, Clock, Sparkles } from 'lucide-react';
+import { Shield, CheckCircle2, RefreshCw, Trash2, Clock, Sparkles, Coins, ShoppingBag, Edit3, AlertTriangle, RotateCcw } from 'lucide-react';
 
 interface ActivityLogViewProps {
   logs: ActivityLogItem[];
@@ -20,15 +20,24 @@ export const ActivityLogView: React.FC<ActivityLogViewProps> = ({ logs, onClearL
 
   const getLogIcon = (type: ActivityLogItem['type']) => {
     switch (type) {
+      case 'penalty':
+        return <AlertTriangle className="w-4 h-4 text-red-500" />;
+      case 'reset_progress':
+        return <RotateCcw className="w-4 h-4 text-orange-500" />;
+      case 'quest_uncomplete':
+        return <RotateCcw className="w-4 h-4 text-amber-500" />;
+      case 'points_spend':
+        return <ShoppingBag className="w-4 h-4 text-amber-500" />;
       case 'quest_delete':
+      case 'skill_delete':
         return <Trash2 className="w-4 h-4 text-red-500" />;
-      case 'level_up':
-        return <Award className="w-4 h-4 text-amber-500" />;
       case 'quest_complete':
         return <CheckCircle2 className="w-4 h-4 text-emerald-500" />;
-      case 'subquest_complete':
-        return <Zap className="w-4 h-4 text-[var(--accent-primary)]" />;
-      case 'skill_level_up':
+      case 'quest_edit':
+      case 'skill_edit':
+        return <Edit3 className="w-4 h-4 text-blue-500" />;
+      case 'skill_create':
+      case 'quest_create':
         return <Sparkles className="w-4 h-4 text-purple-500" />;
       case 'sync':
         return <RefreshCw className="w-4 h-4 text-blue-500" />;
@@ -43,10 +52,10 @@ export const ActivityLogView: React.FC<ActivityLogViewProps> = ({ logs, onClearL
         <div>
           <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-[var(--text-main)] flex items-center gap-2">
             <Shield className="w-6 h-6 text-[var(--accent-primary)]" />
-            <span>Журнал академических подвигов</span>
+            <span>Журнал академических событий</span>
           </h2>
           <p className="text-xs sm:text-sm text-[var(--text-muted)] mt-1">
-            Хронологическая летопись набранного опыта, завершенных этапов и побед над дедлайнами.
+            Хронологическая летопись начисленных и списанных баллов, завершенных этапов и синхронизаций.
           </p>
         </div>
 
@@ -70,7 +79,7 @@ export const ActivityLogView: React.FC<ActivityLogViewProps> = ({ logs, onClearL
           <Clock className="w-12 h-12 mx-auto text-[var(--text-muted)] opacity-40 mb-3" />
           <h3 className="font-bold text-base text-[var(--text-main)]">Журнал пока пуст</h3>
           <p className="text-xs text-[var(--text-muted)] max-w-sm mx-auto mt-1">
-            Выполняйте квесты, отмечайте шаги чеклиста или синхронизируйте расписание, чтобы здесь появилась летопись подвигов.
+            Выполняйте квесты, отмечайте шаги чеклиста или списывайте баллы, чтобы здесь появилась летопись подвигов.
           </p>
         </div>
       ) : (
@@ -81,51 +90,56 @@ export const ActivityLogView: React.FC<ActivityLogViewProps> = ({ logs, onClearL
             borderColor: 'var(--border-subtle)',
           }}
         >
-          {logs.map((log) => (
-            <div
-              key={log.id}
-              className="p-4 sm:p-5 flex items-center justify-between gap-4 hover:bg-black/5 transition-colors"
-            >
-              <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-                <div
-                  className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border"
-                  style={{
-                    backgroundColor: 'rgba(var(--accent-primary), 0.08)',
-                    borderColor: 'var(--border-subtle)',
-                  }}
-                >
-                  {getLogIcon(log.type)}
-                </div>
+          {logs.map((log) => {
+            const pointsVal = log.pointsChange !== undefined ? log.pointsChange : (log.expGained || 0);
 
-                <div className="min-w-0">
-                  <div className="font-semibold text-xs sm:text-sm text-[var(--text-main)] truncate">
-                    {log.title}
+            return (
+              <div
+                key={log.id}
+                className="p-4 sm:p-5 flex items-center justify-between gap-4 hover:bg-black/5 transition-colors"
+              >
+                <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+                  <div
+                    className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border"
+                    style={{
+                      backgroundColor: 'rgba(var(--accent-primary), 0.08)',
+                      borderColor: 'var(--border-subtle)',
+                    }}
+                  >
+                    {getLogIcon(log.type)}
                   </div>
-                  {log.details && (
-                    <div className="text-[11px] text-[var(--text-muted)] truncate mt-0.5">
-                      {log.details}
+
+                  <div className="min-w-0">
+                    <div className="font-semibold text-xs sm:text-sm text-[var(--text-main)] truncate">
+                      {log.title}
                     </div>
-                  )}
-                  <div className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
-                    {formatTime(log.timestamp)} (Астана, UTC+5)
+                    {log.details && (
+                      <div className="text-[11px] text-[var(--text-muted)] truncate mt-0.5">
+                        {log.details}
+                      </div>
+                    )}
+                    <div className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
+                      {formatTime(log.timestamp)} (Астана, UTC+5)
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {log.expGained > 0 && (
-                <div
-                  className="px-2.5 py-1 rounded-lg text-xs font-mono font-bold shrink-0 border"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                    color: '#10b981',
-                  }}
-                >
-                  +{log.expGained} XP
-                </div>
-              )}
-            </div>
-          ))}
+                {pointsVal !== 0 && (
+                  <div
+                    className="px-2.5 py-1 rounded-lg text-xs font-mono font-bold shrink-0 border flex items-center gap-1"
+                    style={{
+                      borderColor: 'var(--border-subtle)',
+                      backgroundColor: pointsVal > 0 ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                      color: pointsVal > 0 ? '#10b981' : '#ef4444',
+                    }}
+                  >
+                    <Coins className="w-3 h-3" />
+                    <span>{pointsVal > 0 ? `+${pointsVal}` : pointsVal} б.</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

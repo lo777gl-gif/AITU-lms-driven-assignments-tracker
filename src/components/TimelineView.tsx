@@ -64,8 +64,13 @@ export const TimelineView: React.FC<TimelineViewProps> = ({ quests, skills, onSe
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          <span className="text-xs font-mono font-bold text-[var(--accent-primary)]">
-            +{quest.baseExp} XP
+          {quest.isRecurring && (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono border text-[var(--text-muted)] flex items-center gap-1">
+              <span>↻</span>
+            </span>
+          )}
+          <span className="text-xs font-mono font-bold text-amber-500">
+            +{quest.points || quest.baseExp || 200} б.
           </span>
           <ChevronRight className="w-4 h-4 text-[var(--text-muted)]" />
         </div>

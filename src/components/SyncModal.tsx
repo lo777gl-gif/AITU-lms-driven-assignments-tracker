@@ -154,8 +154,6 @@ export const SyncModal: React.FC<SyncModalProps> = ({
     }).format(new Date(ts));
   };
 
-  const isCustomUrl = calendarUrl.trim() !== DEFAULT_MOODLE_URL;
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
       <div
@@ -271,20 +269,20 @@ export const SyncModal: React.FC<SyncModalProps> = ({
 
               <div className="flex items-center justify-between mt-1.5">
                 <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-                  {isCustomUrl ? (
-                    <span className="text-emerald-500 font-medium">✓ Используется ваша персональная ссылка</span>
+                  {calendarUrl.trim() ? (
+                    <span className="text-emerald-500 font-medium">✓ Ссылка для синхронизации установлена</span>
                   ) : (
-                    <span>Используется демонстрационная ссылка</span>
+                    <span>Вставьте URL экспорта календаря из вашей системы Moodle</span>
                   )}
                 </p>
 
-                {isCustomUrl && (
+                {calendarUrl.trim() && (
                   <button
                     type="button"
-                    onClick={() => setCalendarUrl(DEFAULT_MOODLE_URL)}
-                    className="text-[11px] text-[var(--text-muted)] hover:text-[var(--text-main)] underline"
+                    onClick={() => setCalendarUrl('')}
+                    className="text-[11px] text-[var(--text-muted)] hover:text-red-400 underline"
                   >
-                    Сбросить к исходной AITU
+                    Очистить
                   </button>
                 )}
               </div>
@@ -436,13 +434,13 @@ export const SyncModal: React.FC<SyncModalProps> = ({
               setCalendarUrl(DEFAULT_MOODLE_URL);
               setStatusMessage({
                 type: 'success',
-                text: 'Восстановлен эталонный календарь курсов Astana IT University!',
+                text: 'Загружен пример учебных квестов и задач!',
               });
               setTimeout(() => onClose(), 1000);
             }}
             className="text-xs text-[var(--text-muted)] hover:text-[var(--text-main)] underline"
           >
-            Загрузить демо-календарь AITU (офлайн)
+            Восстановить пример расписания
           </button>
 
           <button

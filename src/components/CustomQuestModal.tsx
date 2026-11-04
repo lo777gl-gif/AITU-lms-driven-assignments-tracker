@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Skill, Quest, SubQuest, QuestRank } from '../types';
-import { formatToAstanaTime } from '../utils/icsParser';
-import { QUEST_RANKS, RANK_LIST } from '../utils/levelMath';
-import { Plus, X, Sparkles } from 'lucide-react';
+import { Skill, Quest, QuestRank, RecurrenceType } from '../types';
+import { formatToAstanaTime, timestampToDateTimeLocal, dateTimeLocalToTimestamp } from '../utils/icsParser';
+import { QUEST_RANKS, RANK_LIST, WEEKDAYS, RECURRENCE_OPTIONS } from '../utils/levelMath';
+import { Plus, X, Repeat, Calendar, Check, Sparkles } from 'lucide-react';
 
 interface CustomQuestModalProps {
   isOpen: boolean;
@@ -20,59 +20,110 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
   const [title, setTitle] = useState('');
   const [courseName, setCourseName] = useState('Самостоятельная работа');
   const [description, setDescription] = useState('');
-  const [deadlineDays, setDeadlineDays] = useState(3);
-  const [linkedSkillId, setLinkedSkillId] = useState(skills[0]?.id || 'skill-frontend');
-  const [difficulty, setDifficulty] = useState<QuestRank>('C');
+  const [deadlineStr, setDeadlineStr] = useState(() => {
+    const d = new Date(Date.now() + 2 * 24 * 3600 * 1000);
+    d.setHours(20, 0, 0, 0);
+    return timestampToDateTimeLocal(d.getTime());
+  });
+  const [linkedSkillId, setLinkedSkillId] = useState<string>('');
+  const [difficulty, setDifficulty] = useState<QuestRank>('A');
+  const [points, setPoints] = useState<number>(40);
+  const [isRecurring, setIsRecurring] = useState(false);
+  const [recurrenceType, setRecurrenceType] = useState<RecurrenceType>('daily');
+  const [recurrenceDays, setRecurrenceDays] = useState<number>(3);
+  const [recurrenceWeekdays, setRecurrenceWeekdays] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [recurrenceTime, setRecurrenceTime] = useState<string>('23:00');
 
   if (!isOpen) return null;
+
+  const handleDifficultyChange = (rank: QuestRank) => {
+    setDifficulty(rank);
+    setPoints(QUEST_RANKS[rank]?.points || 40);
+  };
+
+  const toggleWeekday = (dayId: number) => {
+    if (recurrenceWeekdays.includes(dayId)) {
+      if (recurrenceWeekdays.length === 1) return;
+      setRecurrenceWeekdays(recurrenceWeekdays.filter((d) => d !== dayId));
+    } else {
+      setRecurrenceWeekdays([...recurrenceWeekdays, dayId].sort((a, b) => a - b));
+    }
+  };
+
+  // Quick Presets
+  const applyPreset = (presetName: string) => {
+    if (presetName === 'sleep') {
+      setTitle('Сон до 23:00');
+      setCourseName('Режим дня');
+      setDescription('Лечь спать вовремя для полноценного сна и ясного ума');
+      setDifficulty('F');
+      setPoints(5);
+      setIsRecurring(true);
+      setRecurrenceType('daily');
+      setRecurrenceTime('23:00');
+    } else if (presetName === 'workout') {
+      setTitle('Утренняя тренировка');
+      setCourseName('Спорт и здоровье');
+      setDescription('Зарядка, ОФП или разминка 20-30 минут');
+      setDifficulty('F');
+      setPoints(5);
+      setIsRecurring(true);
+      setRecurrenceType('weekdays');
+      setRecurrenceWeekdays([1, 2, 3, 4, 5]);
+      setRecurrenceTime('09:00');
+    } else if (presetName === 'running') {
+      setTitle('Бег');
+      setCourseName('Спорт и здоровье');
+      setDescription('Кардио-пробежка на свежем воздухе');
+      setDifficulty('F');
+      setPoints(5);
+      setIsRecurring(true);
+      setRecurrenceType('weekdays');
+      setRecurrenceWeekdays([1, 3, 5]);
+      setRecurrenceTime('08:30');
+    } else if (presetName === 'sdp') {
+      setTitle('Лабораторная по Software Design Patterns (SDP)');
+      setCourseName('Software Design Patterns');
+      setDescription('Сложное задание: архитектурные паттерны и реализация');
+      setDifficulty('S');
+      setPoints(45);
+      setIsRecurring(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
 
-    const deadlineTimestamp = Date.now() + deadlineDays * 24 * 3600 * 1000;
+    const deadlineTimestamp = dateTimeLocalToTimestamp(deadlineStr);
     const uid = `custom-quest-${Date.now()}`;
-    const baseExp = QUEST_RANKS[difficulty].exp;
-
-    const initialSubquests: SubQuest[] = [
-      {
-        id: `${uid}-sub-1`,
-        text: 'Собрать материалы и составить план выполнения',
-        isCompleted: false,
-        exp: 20,
-      },
-      {
-        id: `${uid}-sub-2`,
-        text: 'Выполнить основной объем работы',
-        isCompleted: false,
-        exp: 25,
-      },
-      {
-        id: `${uid}-sub-3`,
-        text: 'Финальная проверка и завершение задачи',
-        isCompleted: false,
-        exp: 20,
-      },
-    ];
+    const finalPoints = Math.max(5, points);
 
     const newQuest: Quest = {
       id: uid,
       summary: title.trim(),
       cleanTitle: title.trim(),
-      description: description.trim() || 'Пользовательский академический квест',
-      categories: `${courseName} | Студент`,
-      courseName: courseName.trim(),
-      instructor: 'Личный план',
+      description: description.trim(),
+      categories: courseName.trim() || 'Общее',
+      courseName: courseName.trim() || 'Общее',
+      instructor: 'Пользовательское задание',
       dtStart: new Date().toISOString(),
       dtEnd: new Date(deadlineTimestamp).toISOString(),
       localDeadline: formatToAstanaTime(deadlineTimestamp),
       deadlineTimestamp,
       isCompleted: false,
-      subquests: initialSubquests,
       linkedSkillId,
-      baseExp,
+      points: finalPoints,
+      baseExp: finalPoints,
       difficulty,
       isCustom: true,
+      isRecurring,
+      recurrenceType: isRecurring ? recurrenceType : undefined,
+      recurrenceDays: isRecurring && recurrenceType === 'interval_days' ? recurrenceDays : undefined,
+      recurrenceWeekdays: isRecurring && recurrenceType === 'weekdays' ? recurrenceWeekdays : undefined,
+      recurrenceTime: isRecurring ? recurrenceTime : undefined,
+      completedCount: 0,
+      isTodayAgenda: isRecurring && recurrenceType === 'daily',
     };
 
     onCreateQuest(newQuest);
@@ -82,28 +133,32 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
       <div
-        className="w-full max-w-lg rounded-2xl border p-6 shadow-2xl animate-scaleIn"
+        className="w-full max-w-xl rounded-2xl border p-6 shadow-2xl animate-scaleIn max-h-[90vh] overflow-y-auto"
         style={{
           backgroundColor: 'var(--bg-surface)',
           borderColor: 'var(--border-strong)',
         }}
       >
+        {/* Header */}
         <div
           className="flex items-center justify-between pb-4 border-b"
           style={{ borderColor: 'var(--border-subtle)' }}
         >
           <div className="flex items-center gap-2.5">
             <div
-              className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-white shadow-sm"
-              style={{
-                backgroundColor: 'var(--accent-primary)',
-              }}
+              className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold shadow-sm"
+              style={{ backgroundColor: 'var(--accent-primary)' }}
             >
-              <Sparkles className="w-4 h-4" />
+              <Plus className="w-5 h-5" />
             </div>
-            <h3 className="text-lg font-bold text-[var(--text-main)]">
-              Создать личный квест
-            </h3>
+            <div>
+              <h3 className="text-lg font-bold text-[var(--text-main)]">
+                Новое задание
+              </h3>
+              <p className="text-xs text-[var(--text-muted)]">
+                Создание задачи, привычки на день или университетского квеста
+              </p>
+            </div>
           </div>
 
           <button
@@ -114,23 +169,66 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4 mt-4">
+        {/* Quick Presets Bar */}
+        <div className="my-3.5">
+          <span className="text-[11px] font-semibold text-[var(--text-muted)] mb-1.5 block">
+            Быстрые шаблоны:
+          </span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => applyPreset('sleep')}
+              className="px-2.5 py-1 rounded-lg text-xs font-medium border text-[var(--text-main)] hover:border-[var(--accent-primary)] hover:bg-[var(--bg-surface-hover)] transition-all"
+              style={{ borderColor: 'var(--border-subtle)' }}
+            >
+              🌙 Сон до 23:00 (5 б.)
+            </button>
+            <button
+              type="button"
+              onClick={() => applyPreset('workout')}
+              className="px-2.5 py-1 rounded-lg text-xs font-medium border text-[var(--text-main)] hover:border-[var(--accent-primary)] hover:bg-[var(--bg-surface-hover)] transition-all"
+              style={{ borderColor: 'var(--border-subtle)' }}
+            >
+              🏋️ Тренировка (Пн-Пт, 5 б.)
+            </button>
+            <button
+              type="button"
+              onClick={() => applyPreset('running')}
+              className="px-2.5 py-1 rounded-lg text-xs font-medium border text-[var(--text-main)] hover:border-[var(--accent-primary)] hover:bg-[var(--bg-surface-hover)] transition-all"
+              style={{ borderColor: 'var(--border-subtle)' }}
+            >
+              🏃 Бег (Пн, Ср, Пт, 5 б.)
+            </button>
+            <button
+              type="button"
+              onClick={() => applyPreset('sdp')}
+              className="px-2.5 py-1 rounded-lg text-xs font-medium border text-[var(--text-main)] hover:border-[var(--accent-primary)] hover:bg-[var(--bg-surface-hover)] transition-all"
+              style={{ borderColor: 'var(--border-subtle)' }}
+            >
+              💻 Задание по SDP (45 б.)
+            </button>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Title */}
           <div>
             <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">
-              Название задания / цели *
+              Название задания *
             </label>
             <input
               type="text"
               required
-              placeholder="например: Подготовиться к защите DAA Assignment 3"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl text-xs border bg-transparent text-[var(--text-main)] focus:outline-none"
+              placeholder="Например: Сон до 23:00 или Лабораторная по SDP"
+              className="w-full px-3 py-2 rounded-xl text-xs sm:text-sm border bg-transparent text-[var(--text-main)] focus:outline-none"
               style={{ borderColor: 'var(--border-subtle)' }}
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Course / Category & Skill */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">
                 Курс или категория
@@ -139,7 +237,7 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
                 type="text"
                 value={courseName}
                 onChange={(e) => setCourseName(e.target.value)}
-                placeholder="например: Algorithms & Data Structures"
+                placeholder="Software Design Patterns, Режим дня, Спорт..."
                 className="w-full px-3 py-2 rounded-xl text-xs border bg-transparent text-[var(--text-main)] focus:outline-none"
                 style={{ borderColor: 'var(--border-subtle)' }}
               />
@@ -147,111 +245,243 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
 
             <div>
               <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">
-                Прокачиваемый навык
+                Связанный навык
               </label>
               <select
                 value={linkedSkillId}
                 onChange={(e) => setLinkedSkillId(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl text-xs border focus:outline-none cursor-pointer"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                }}
+                className="w-full px-3 py-2 rounded-xl text-xs border focus:outline-none bg-[var(--bg-surface)] text-[var(--text-main)]"
+                style={{ borderColor: 'var(--border-subtle)' }}
               >
+                <option value="">(Не выбрано)</option>
                 {skills.map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.name} (Ур.{s.level})
+                    {s.name}
                   </option>
                 ))}
               </select>
             </div>
           </div>
 
-          {/* Difficulty Rank S - F */}
+          {/* Deadline Picker */}
           <div>
-            <label className="block text-xs font-semibold text-[var(--text-main)] mb-1.5">
-              Сложность задания (Ранг S — F)
+            <label className="block text-xs font-semibold text-[var(--text-main)] mb-1 flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+              <span>Дедлайн / Время выполнения (Астана, UTC+5) *</span>
             </label>
-            <div className="grid grid-cols-7 gap-1.5">
-              {RANK_LIST.map((r) => {
-                const info = QUEST_RANKS[r];
-                const isSelected = difficulty === r;
+            <input
+              type="datetime-local"
+              required
+              value={deadlineStr}
+              onChange={(e) => setDeadlineStr(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl text-xs sm:text-sm border bg-transparent text-[var(--text-main)] font-mono focus:outline-none"
+              style={{ borderColor: 'var(--border-subtle)' }}
+            />
+          </div>
+
+          {/* Difficulty & Points */}
+          <div>
+            <label className="block text-xs font-semibold text-[var(--text-main)] mb-2">
+              Сложность и награда в баллах
+            </label>
+            <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+              {RANK_LIST.map((rank) => {
+                const info = QUEST_RANKS[rank];
+                const isSelected = difficulty === rank;
                 return (
                   <button
-                    key={r}
+                    key={rank}
                     type="button"
-                    onClick={() => setDifficulty(r)}
-                    className={`py-2 rounded-xl font-mono text-xs font-bold transition-all text-center flex flex-col items-center justify-center ${
-                      isSelected ? 'ring-2 ring-offset-1 ring-[var(--accent-primary)] shadow-md' : 'opacity-70 hover:opacity-100'
+                    onClick={() => handleDifficultyChange(rank)}
+                    className={`py-2 rounded-xl border flex flex-col items-center justify-center transition-all ${
+                      isSelected ? 'ring-2 ring-offset-1 ring-[var(--accent-primary)] scale-[1.03]' : 'opacity-75 hover:opacity-100'
                     }`}
                     style={{
-                      backgroundColor: info.badgeBg,
-                      color: info.badgeText,
+                      backgroundColor: isSelected ? info.badgeBg : 'var(--bg-surface-hover)',
+                      borderColor: isSelected ? info.badgeBorder : 'var(--border-subtle)',
+                      color: isSelected ? info.badgeText : 'var(--text-main)',
                     }}
                   >
-                    <span>{r}</span>
-                    <span className="text-[10px] font-normal opacity-90">{info.exp}XP</span>
+                    <span className="font-mono font-bold text-xs sm:text-sm">{rank}</span>
+                    <span className="text-[10px] mt-0.5 opacity-90">{info.points} б.</span>
                   </button>
                 );
               })}
             </div>
-            <div className="text-[11px] text-[var(--text-muted)] mt-1.5">
-              Выбран: <span className="font-semibold text-[var(--text-main)]">{QUEST_RANKS[difficulty].label}</span> (+{QUEST_RANKS[difficulty].exp} XP)
-            </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">
-              Срок выполнения (дедлайн)
+          {/* Points input */}
+          <div className="flex items-center gap-3">
+            <label className="text-xs font-semibold text-[var(--text-main)] whitespace-nowrap">
+              Точные баллы:
             </label>
-            <select
-              value={deadlineDays}
-              onChange={(e) => setDeadlineDays(Number(e.target.value))}
-              className="w-full px-3 py-2 rounded-xl text-xs border focus:outline-none cursor-pointer"
-              style={{
-                borderColor: 'var(--border-subtle)',
-              }}
-            >
-              <option value={1}>Через 24 часа (Срочный! 🔥)</option>
-              <option value={2}>Через 2 дня</option>
-              <option value={3}>Через 3 дня</option>
-              <option value={7}>Через 1 неделю</option>
-              <option value={14}>Через 2 недели</option>
-            </select>
+            <input
+              type="number"
+              min={1}
+              max={200}
+              value={points}
+              onChange={(e) => setPoints(Number(e.target.value))}
+              className="w-24 px-3 py-1 rounded-xl text-xs font-mono font-bold border bg-transparent text-[var(--text-main)] focus:outline-none"
+              style={{ borderColor: 'var(--border-subtle)' }}
+            />
+            <span className="text-xs text-[var(--text-muted)]">
+              (Недельный лимит: ~200 б.)
+            </span>
           </div>
 
+          {/* Recurring Task Settings */}
+          <div
+            className="p-3.5 rounded-xl border space-y-3"
+            style={{
+              backgroundColor: 'var(--bg-surface-hover)',
+              borderColor: 'var(--border-subtle)',
+            }}
+          >
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isRecurring}
+                onChange={(e) => setIsRecurring(e.target.checked)}
+                className="rounded border-[var(--border-subtle)] text-[var(--accent-primary)] w-4 h-4"
+              />
+              <span className="text-xs font-bold text-[var(--text-main)] flex items-center gap-1.5">
+                <Repeat className="w-3.5 h-3.5 text-purple-500" />
+                <span>Повторяющееся задание (привычка / цикл)</span>
+              </span>
+            </label>
+
+            {isRecurring && (
+              <div className="space-y-3 pt-2 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+                {/* 3 allowed recurrence options */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-[var(--text-muted)] mb-1.5">
+                    Режим повторения:
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {RECURRENCE_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setRecurrenceType(opt.id)}
+                        className={`py-1.5 px-2 rounded-lg text-xs font-semibold border transition-all ${
+                          recurrenceType === opt.id
+                            ? 'bg-[var(--accent-primary)] text-white shadow-sm'
+                            : 'bg-transparent text-[var(--text-muted)] hover:text-[var(--text-main)]'
+                        }`}
+                        style={{ borderColor: 'var(--border-subtle)' }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Option 2: Interval Days (Раз в N дней) */}
+                {recurrenceType === 'interval_days' && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-[var(--text-muted)]">Повторять каждые:</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={90}
+                      value={recurrenceDays}
+                      onChange={(e) => setRecurrenceDays(Math.max(1, parseInt(e.target.value) || 1))}
+                      className="w-16 px-2.5 py-1 text-xs rounded-lg border font-mono bg-transparent text-[var(--text-main)] focus:outline-none"
+                      style={{ borderColor: 'var(--border-subtle)' }}
+                    />
+                    <span className="text-xs text-[var(--text-muted)]">дней</span>
+                  </div>
+                )}
+
+                {/* Option 3: Weekdays (Выбрать дни недели) */}
+                {recurrenceType === 'weekdays' && (
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[var(--text-muted)] mb-1.5">
+                      Выберите дни недели:
+                    </label>
+                    <div className="grid grid-cols-7 gap-1.5">
+                      {WEEKDAYS.map((w) => {
+                        const isDaySelected = recurrenceWeekdays.includes(w.id);
+                        return (
+                          <button
+                            key={w.id}
+                            type="button"
+                            onClick={() => toggleWeekday(w.id)}
+                            title={w.full}
+                            className={`py-2 rounded-lg text-xs font-bold font-mono border transition-all ${
+                              isDaySelected
+                                ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
+                                : 'bg-transparent text-[var(--text-muted)] hover:text-[var(--text-main)]'
+                            }`}
+                            style={{ borderColor: isDaySelected ? '#9333ea' : 'var(--border-subtle)' }}
+                          >
+                            {w.short}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Configurable recurrence time */}
+                <div className="pt-2 border-t flex flex-col sm:flex-row sm:items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[var(--text-main)]">
+                      Время обновления / дедлайна (Астана, UTC+5):
+                    </label>
+                    <span className="text-[10px] text-[var(--text-muted)]">
+                      В это время суток задача обновится для следующего выполнения
+                    </span>
+                  </div>
+                  <input
+                    type="time"
+                    required
+                    value={recurrenceTime}
+                    onChange={(e) => setRecurrenceTime(e.target.value || '23:00')}
+                    className="w-32 px-2.5 py-1 text-xs rounded-lg border font-mono font-bold bg-transparent text-[var(--text-main)] focus:outline-none"
+                    style={{ borderColor: 'var(--border-subtle)' }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Description */}
           <div>
             <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">
-              Заметки и ссылки к задаче
+              Краткое примечание (необязательно)
             </label>
-            <textarea
-              rows={3}
+            <input
+              type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Ссылки на документацию, репозиторий GitHub или критерии оценки..."
+              placeholder="Дополнительные детали..."
               className="w-full px-3 py-2 rounded-xl text-xs border bg-transparent text-[var(--text-main)] focus:outline-none"
               style={{ borderColor: 'var(--border-subtle)' }}
             />
           </div>
 
+          {/* Actions */}
           <div
-            className="flex items-center justify-end gap-3 pt-4 border-t"
+            className="pt-4 border-t flex items-center justify-end gap-3"
             style={{ borderColor: 'var(--border-subtle)' }}
           >
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl text-xs font-medium text-[var(--text-muted)] hover:text-[var(--text-main)]"
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-[var(--text-muted)] hover:text-[var(--text-main)] border"
+              style={{ borderColor: 'var(--border-subtle)' }}
             >
               Отмена
             </button>
+
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl text-xs font-bold text-white shadow-sm transition-all active:scale-95"
-              style={{
-                backgroundColor: 'var(--accent-primary)',
-              }}
+              className="px-5 py-2 rounded-xl text-xs font-semibold text-white shadow-sm transition-all active:scale-95 flex items-center gap-1.5"
+              style={{ backgroundColor: 'var(--accent-primary)' }}
             >
-              Создать квест
+              <Check className="w-4 h-4" />
+              <span>Создать квест</span>
             </button>
           </div>
         </form>

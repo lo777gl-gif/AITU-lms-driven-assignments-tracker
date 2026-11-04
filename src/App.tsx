@@ -3,17 +3,25 @@ import {
   ThemeId,
   Quest,
   Skill,
-  SubQuest,
   UserProfile,
   ActivityLogItem,
   FilterOptions,
   QuestRank,
+  UserAccount,
 } from './types';
-import { DEFAULT_MOODLE_URL, DEFAULT_ICS_DATA } from './data/defaultCalendar';
+import { DEFAULT_MOODLE_URL, DEFAULT_ICS_DATA, getInitialQuests } from './data/defaultCalendar';
 import { INITIAL_SKILLS } from './data/defaultSkills';
-import { parseMoodleIcs, getQuestStatus } from './utils/icsParser';
+import { parseMoodleIcs, getQuestStatus, formatToAstanaTime } from './utils/icsParser';
 import { soundEffects } from './utils/sound';
-import { getExpForLevel, QUEST_RANKS, RANK_LIST } from './utils/levelMath';
+import {
+  QUEST_RANKS,
+  RANK_LIST,
+  getNextRecurringDeadline,
+  isTaskScheduledForToday,
+  getRecurrenceDescription,
+  getAstanaDateString,
+  getQuestPenaltyPoints,
+} from './utils/levelMath';
 import { TopBar } from './components/TopBar';
 import { PlayerHUD } from './components/PlayerHUD';
 import { QuestCard } from './components/QuestCard';
@@ -21,32 +29,49 @@ import { SkillsTree } from './components/SkillsTree';
 import { ActivityLogView } from './components/ActivityLogView';
 import { TimelineView } from './components/TimelineView';
 import { SyncModal } from './components/SyncModal';
-import { LevelUpModal } from './components/LevelUpModal';
 import { CustomQuestModal } from './components/CustomQuestModal';
-import { Search, Flame, ArrowUpDown, Sparkles, Link2, RefreshCw } from 'lucide-react';
+import { EditQuestModal } from './components/EditQuestModal';
+import { SpendPointsModal } from './components/SpendPointsModal';
+import { AccountModal } from './components/AccountModal';
+import { ResetProgressModal } from './components/ResetProgressModal';
+import { PenaltyModal } from './components/PenaltyModal';
+import {
+  Search,
+  Flame,
+  ArrowUpDown,
+  Sparkles,
+  Link2,
+  RefreshCw,
+  Coins,
+  Calendar,
+  CheckCircle2,
+  Sun,
+  Moon,
+  Clock,
+  Circle,
+} from 'lucide-react';
 
 const STORAGE_KEYS = {
   THEME: 'questlog_theme',
-  PROFILE: 'questlog_profile',
-  SKILLS: 'questlog_skills',
-  QUESTS: 'questlog_quests',
-  DELETED_IDS: 'questlog_deleted_ids',
-  LOGS: 'questlog_logs',
-  LAST_SYNC: 'questlog_last_sync',
-  MOODLE_URL: 'questlog_moodle_url',
+  ACCOUNTS_LIST: 'questlog_accounts_v1',
+  ACTIVE_USER: 'questlog_active_user_v1',
+};
+
+const getAccountStorageKey = (username: string, key: string) => {
+  const safeUser = (username || 'student').trim().toLowerCase();
+  return `questlog_u_${safeUser}_${key}`;
 };
 
 const DEFAULT_PROFILE: UserProfile = {
-  name: 'Алексей Студент',
-  level: 1,
-  exp: 40,
-  maxExp: 150,
-  totalExpEarned: 40,
+  name: 'Студент',
+  points: 120,
+  totalPointsEarned: 120,
+  totalPointsSpent: 0,
+  totalPenalties: 0,
   completedQuestsCount: 0,
   soundEnabled: true,
   lastSyncTimestamp: Date.now(),
-  streakDays: 4,
-  perksUnlocked: [],
+  streakDays: 1,
 };
 
 export default function App() {
@@ -60,66 +85,107 @@ export default function App() {
     return 'dark';
   });
 
-  // User's custom Moodle URL
-  const [moodleUrl, setMoodleUrl] = useState<string>(() => {
-    return localStorage.getItem(STORAGE_KEYS.MOODLE_URL) || DEFAULT_MOODLE_URL;
+  // Account System: Current active nickname
+  const [currentUsername, setCurrentUsername] = useState<string>(() => {
+    return localStorage.getItem(STORAGE_KEYS.ACTIVE_USER) || 'Студент';
   });
 
-  // User Profile
-  const [profile, setProfile] = useState<UserProfile>(() => {
+  // Account System: List of accounts registered on this device
+  const [accounts, setAccounts] = useState<UserAccount[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.PROFILE);
-      return saved ? JSON.parse(saved) : DEFAULT_PROFILE;
+      const saved = localStorage.getItem(STORAGE_KEYS.ACCOUNTS_LIST);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+      return [{ username: 'Студент', createdAt: Date.now(), lastLoginAt: Date.now() }];
     } catch {
-      return DEFAULT_PROFILE;
+      return [{ username: 'Студент', createdAt: Date.now(), lastLoginAt: Date.now() }];
     }
   });
 
-  // Skills
-  const [skills, setSkills] = useState<Skill[]>(() => {
+  // User's Moodle URL (per account)
+  const [moodleUrl, setMoodleUrl] = useState<string>(() => {
+    const active = localStorage.getItem(STORAGE_KEYS.ACTIVE_USER) || 'Студент';
+    return localStorage.getItem(getAccountStorageKey(active, 'moodle_url')) || DEFAULT_MOODLE_URL;
+  });
+
+  // User Profile with Points System (per account)
+  const [profile, setProfile] = useState<UserProfile>(() => {
+    const active = localStorage.getItem(STORAGE_KEYS.ACTIVE_USER) || 'Студент';
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.SKILLS);
+      const saved = localStorage.getItem(getAccountStorageKey(active, 'profile'));
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          name: parsed.name || active,
+          points: parsed.points !== undefined ? parsed.points : 120,
+          totalPointsEarned: parsed.totalPointsEarned !== undefined ? parsed.totalPointsEarned : 120,
+          totalPointsSpent: parsed.totalPointsSpent || 0,
+          totalPenalties: parsed.totalPenalties || 0,
+          completedQuestsCount: parsed.completedQuestsCount || 0,
+          soundEnabled: parsed.soundEnabled !== undefined ? parsed.soundEnabled : true,
+          lastSyncTimestamp: parsed.lastSyncTimestamp || Date.now(),
+          streakDays: parsed.streakDays || 1,
+        };
+      }
+      return { ...DEFAULT_PROFILE, name: active };
+    } catch {
+      return { ...DEFAULT_PROFILE, name: active };
+    }
+  });
+
+  // Skills (per account)
+  const [skills, setSkills] = useState<Skill[]>(() => {
+    const active = localStorage.getItem(STORAGE_KEYS.ACTIVE_USER) || 'Студент';
+    try {
+      const saved = localStorage.getItem(getAccountStorageKey(active, 'skills'));
       return saved ? JSON.parse(saved) : INITIAL_SKILLS;
     } catch {
       return INITIAL_SKILLS;
     }
   });
 
-  // Track deleted quest IDs
+  // Track deleted quest IDs (per account)
   const [deletedQuestIds, setDeletedQuestIds] = useState<string[]>(() => {
+    const active = localStorage.getItem(STORAGE_KEYS.ACTIVE_USER) || 'Студент';
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.DELETED_IDS);
+      const saved = localStorage.getItem(getAccountStorageKey(active, 'deleted_ids'));
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
     }
   });
 
-  // Quests
+  // Quests (initialized with balanced habits & university tasks per account)
   const [quests, setQuests] = useState<Quest[]>(() => {
+    const active = localStorage.getItem(STORAGE_KEYS.ACTIVE_USER) || 'Студент';
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.QUESTS);
-      if (saved) return JSON.parse(saved);
-      const delSet = new Set<string>();
-      return parseMoodleIcs(DEFAULT_ICS_DATA, {}, delSet);
+      const saved = localStorage.getItem(getAccountStorageKey(active, 'quests'));
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+      return getInitialQuests();
     } catch {
-      return parseMoodleIcs(DEFAULT_ICS_DATA);
+      return getInitialQuests();
     }
   });
 
-  // Activity Logs
+  // Activity Logs (per account)
   const [logs, setLogs] = useState<ActivityLogItem[]>(() => {
+    const active = localStorage.getItem(STORAGE_KEYS.ACTIVE_USER) || 'Студент';
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.LOGS);
+      const saved = localStorage.getItem(getAccountStorageKey(active, 'logs'));
       if (saved) return JSON.parse(saved);
       return [
         {
           id: 'log-init-1',
           timestamp: Date.now() - 3600000,
           type: 'sync',
-          title: 'Инициализация календаря Moodle LMS',
-          details: 'Загружено расписание рубежных и практических задач',
-          expGained: 0,
+          title: 'Инициализация расписания и балловой системы',
+          details: 'Баланс: до 200 баллов в неделю (сон, спорт, университет)',
+          pointsChange: 0,
         },
       ];
     } catch {
@@ -132,12 +198,16 @@ export default function App() {
 
   // Modals state
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
-  const [isLevelUpModalOpen, setIsLevelUpModalOpen] = useState(false);
   const [isNewQuestModalOpen, setIsNewQuestModalOpen] = useState(false);
+  const [isSpendModalOpen, setIsSpendModalOpen] = useState(false);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+  const [isResetProgressModalOpen, setIsResetProgressModalOpen] = useState(false);
+  const [isPenaltyModalOpen, setIsPenaltyModalOpen] = useState(false);
+  const [editingQuest, setEditingQuest] = useState<Quest | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // Floating notification toast for gained EXP
-  const [expToast, setExpToast] = useState<{ id: number; text: string; exp: number } | null>(null);
+  // Floating notification toast for Points change (+/-)
+  const [pointsToast, setPointsToast] = useState<{ id: number; text: string; points: number; isDeduction?: boolean } | null>(null);
 
   // Quest Filters
   const [filters, setFilters] = useState<FilterOptions>({
@@ -155,128 +225,111 @@ export default function App() {
     localStorage.setItem(STORAGE_KEYS.THEME, theme);
   }, [theme]);
 
-  // Persist moodle URL
+  // Persist Active Account and Accounts List
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.MOODLE_URL, moodleUrl);
-  }, [moodleUrl]);
+    localStorage.setItem(STORAGE_KEYS.ACTIVE_USER, currentUsername);
+  }, [currentUsername]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.ACCOUNTS_LIST, JSON.stringify(accounts));
+  }, [accounts]);
+
+  // Persist current account data to namespaced keys
+  useEffect(() => {
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'moodle_url'), moodleUrl);
+  }, [currentUsername, moodleUrl]);
 
   // Sync sound setting
   useEffect(() => {
     soundEffects.setEnabled(profile.soundEnabled);
   }, [profile.soundEnabled]);
 
-  // Save changes to localStorage
+  // Save changes to localStorage under current account key
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(profile));
-  }, [profile]);
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'profile'), JSON.stringify(profile));
+  }, [currentUsername, profile]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.SKILLS, JSON.stringify(skills));
-  }, [skills]);
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'skills'), JSON.stringify(skills));
+  }, [currentUsername, skills]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.QUESTS, JSON.stringify(quests));
-  }, [quests]);
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'quests'), JSON.stringify(quests));
+  }, [currentUsername, quests]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.DELETED_IDS, JSON.stringify(deletedQuestIds));
-  }, [deletedQuestIds]);
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'deleted_ids'), JSON.stringify(deletedQuestIds));
+  }, [currentUsername, deletedQuestIds]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.LOGS, JSON.stringify(logs));
-  }, [logs]);
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'logs'), JSON.stringify(logs));
+  }, [currentUsername, logs]);
 
   // Toggle Dark / Light theme
   const handleToggleTheme = () => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
-  // Trigger floating EXP banner
-  const triggerExpToast = useCallback((amount: number, reason: string) => {
-    setExpToast({ id: Date.now(), text: reason, exp: amount });
+  // Trigger floating Points banner
+  const triggerPointsToast = useCallback((amount: number, reason: string, isDeduction = false) => {
+    setPointsToast({ id: Date.now(), text: reason, points: amount, isDeduction });
     setTimeout(() => {
-      setExpToast(null);
-    }, 1800);
+      setPointsToast(null);
+    }, 2200);
   }, []);
 
-  // Award EXP to player & linked skill
-  const awardExp = useCallback((amount: number, reason: string, skillId?: string) => {
+  // Award points to player & linked skill
+  const awardPoints = useCallback((amount: number, reason: string, skillId?: string) => {
     soundEffects.playExpChime();
-    triggerExpToast(amount, reason);
+    triggerPointsToast(amount, reason, false);
 
-    setProfile((prev) => {
-      let newExp = prev.exp + amount;
-      let newLevel = prev.level;
-      let newMaxExp = prev.maxExp;
-      let didLevelUp = false;
-
-      while (newExp >= newMaxExp) {
-        newExp -= newMaxExp;
-        newLevel += 1;
-        newMaxExp = getExpForLevel(newLevel);
-        didLevelUp = true;
-      }
-
-      if (didLevelUp) {
-        soundEffects.playLevelUpFanfare();
-        setIsLevelUpModalOpen(true);
-        setLogs((prevLogs) => [
-          {
-            id: `log-lvl-${Date.now()}`,
-            timestamp: Date.now(),
-            type: 'level_up',
-            title: `ПОВЫШЕНИЕ УРОВНЯ! Достигнут Уровень ${newLevel}`,
-            details: `Следующий уровень требует ${newMaxExp} XP`,
-            expGained: 0,
-          },
-          ...prevLogs,
-        ]);
-      }
-
-      return {
-        ...prev,
-        level: newLevel,
-        exp: newExp,
-        maxExp: newMaxExp,
-        totalExpEarned: prev.totalExpEarned + amount,
-      };
-    });
+    setProfile((prev) => ({
+      ...prev,
+      points: prev.points + amount,
+      totalPointsEarned: prev.totalPointsEarned + amount,
+    }));
 
     if (skillId) {
       setSkills((prevSkills) =>
         prevSkills.map((sk) => {
           if (sk.id !== skillId) return sk;
-
-          let sExp = sk.exp + amount;
-          let sLvl = sk.level;
-          let sMax = sk.maxExp;
-
-          if (sExp >= sMax) {
-            sExp -= sMax;
-            sLvl += 1;
-            sMax = sLvl * 150;
-
-            setLogs((prevLogs) => [
-              {
-                id: `log-sk-lvl-${Date.now()}`,
-                timestamp: Date.now(),
-                type: 'skill_level_up',
-                title: `Прокачка навыка: ${sk.name} повышен до Ур.${sLvl}!`,
-                expGained: 0,
-                skillId: sk.id,
-                skillName: sk.name,
-              },
-              ...prevLogs,
-            ]);
-          }
-
-          return { ...sk, exp: sExp, level: sLvl, maxExp: sMax };
+          return { ...sk, points: (sk.points || 0) + amount };
         })
       );
     }
-  }, [triggerExpToast]);
+  }, [triggerPointsToast]);
 
-  // Complete a quest
+  // Spend points on rewards
+  const handleSpendPoints = useCallback((amount: number, reason: string): boolean => {
+    if (profile.points < amount) {
+      return false;
+    }
+
+    soundEffects.playSpendChime();
+    triggerPointsToast(amount, `Списание: ${reason}`, true);
+
+    setProfile((prev) => ({
+      ...prev,
+      points: prev.points - amount,
+      totalPointsSpent: prev.totalPointsSpent + amount,
+    }));
+
+    setLogs((prevLogs) => [
+      {
+        id: `log-spend-${Date.now()}`,
+        timestamp: Date.now(),
+        type: 'points_spend',
+        title: `Списание баллов: ${reason}`,
+        details: `Списано: ${amount} б. Оставшийся баланс: ${profile.points - amount} б.`,
+        pointsChange: -amount,
+      },
+      ...prevLogs,
+    ]);
+
+    return true;
+  }, [profile.points, triggerPointsToast]);
+
+  // Complete a quest (handles recurring tasks by advancing the deadline)
   const handleCompleteQuest = useCallback((questId: string) => {
     soundEffects.playQuestComplete();
 
@@ -284,9 +337,47 @@ export default function App() {
       prev.map((q) => {
         if (q.id !== questId) return q;
 
-        awardExp(q.baseExp, `Квест выполнен: ${q.cleanTitle}`, q.linkedSkillId);
+        const pointsToAward = q.points || QUEST_RANKS[q.difficulty]?.points || 5;
 
-        const updatedSubs = q.subquests.map((s) => ({ ...s, isCompleted: true }));
+        // If it's a recurring task:
+        if (q.isRecurring) {
+          const todayDateStr = getAstanaDateString(Date.now());
+          const nextTimestamp = getNextRecurringDeadline(
+            q.deadlineTimestamp,
+            q.recurrenceType || 'daily',
+            q.recurrenceDays || 1,
+            q.recurrenceWeekdays || [1, 2, 3, 4, 5],
+            q.recurrenceTime || '23:00'
+          );
+          const nextLocalDeadline = formatToAstanaTime(nextTimestamp);
+
+          awardPoints(pointsToAward, `Выполнено: ${q.cleanTitle}`, q.linkedSkillId);
+
+          setLogs((prevLogs) => [
+            {
+              id: `log-q-rec-${Date.now()}`,
+              timestamp: Date.now(),
+              type: 'quest_complete',
+              title: `Выполнен цикл: ${q.cleanTitle}`,
+              details: `Следующий срок: ${nextLocalDeadline}. Начислено: +${pointsToAward} б.`,
+              pointsChange: pointsToAward,
+              skillId: q.linkedSkillId,
+            },
+            ...prevLogs,
+          ]);
+
+          return {
+            ...q,
+            isCompleted: true, // Remains completed for today! Will NOT reappear today
+            lastCompletedDate: todayDateStr,
+            completedAt: new Date().toISOString(),
+            completedCount: (q.completedCount || 0) + 1,
+            nextScheduledDate: nextTimestamp,
+          };
+        }
+
+        // Standard non-recurring quest
+        awardPoints(pointsToAward, `Квест выполнен: ${q.cleanTitle}`, q.linkedSkillId);
 
         setLogs((prevLogs) => [
           {
@@ -294,28 +385,337 @@ export default function App() {
             timestamp: Date.now(),
             type: 'quest_complete',
             title: `Завершен квест: ${q.cleanTitle}`,
-            details: `Курс: ${q.courseName} (Ранг ${q.difficulty})`,
-            expGained: q.baseExp,
+            details: `Курс: ${q.courseName} (+${pointsToAward} б.)`,
+            pointsChange: pointsToAward,
             skillId: q.linkedSkillId,
           },
           ...prevLogs,
         ]);
 
+        setProfile((p) => ({ ...p, completedQuestsCount: p.completedQuestsCount + 1 }));
+
         return {
           ...q,
           isCompleted: true,
           completedAt: new Date().toISOString(),
-          subquests: updatedSubs,
         };
       })
     );
-  }, [awardExp]);
+  }, [awardPoints]);
 
-  // Uncomplete a quest
+  // Uncomplete a quest (deducts points and updates profile and skills)
   const handleUncompleteQuest = useCallback((questId: string) => {
+    let deductedPoints = 0;
+    let targetSkillId = '';
+    let questTitle = '';
+
     setQuests((prev) =>
-      prev.map((q) => (q.id === questId ? { ...q, isCompleted: false, completedAt: undefined } : q))
+      prev.map((q) => {
+        if (q.id !== questId) return q;
+        if (!q.isCompleted) return q;
+
+        deductedPoints = q.points || QUEST_RANKS[q.difficulty]?.points || 5;
+        targetSkillId = q.linkedSkillId;
+        questTitle = q.cleanTitle;
+
+        return {
+          ...q,
+          isCompleted: false,
+          completedAt: undefined,
+          lastCompletedDate: undefined,
+          nextScheduledDate: undefined,
+          completedCount: Math.max(0, (q.completedCount || 1) - 1),
+        };
+      })
     );
+
+    if (deductedPoints > 0) {
+      soundEffects.playSpendChime();
+      triggerPointsToast(deductedPoints, `Отмена выполнения: ${questTitle}`, true);
+
+      setProfile((prev) => ({
+        ...prev,
+        points: Math.max(0, prev.points - deductedPoints),
+        totalPointsEarned: Math.max(0, prev.totalPointsEarned - deductedPoints),
+        completedQuestsCount: Math.max(0, prev.completedQuestsCount - 1),
+      }));
+
+      if (targetSkillId) {
+        setSkills((prevSkills) =>
+          prevSkills.map((sk) => {
+            if (sk.id !== targetSkillId) return sk;
+            return { ...sk, points: Math.max(0, (sk.points || 0) - deductedPoints) };
+          })
+        );
+      }
+
+      setLogs((prev) => [
+        {
+          id: `log-uncomp-${Date.now()}`,
+          timestamp: Date.now(),
+          type: 'quest_uncomplete',
+          title: `Снята отметка: ${questTitle}`,
+          details: `Снято -${deductedPoints} б. с баланса`,
+          pointsChange: -deductedPoints,
+          skillId: targetSkillId,
+        },
+        ...prev,
+      ]);
+    }
+  }, [triggerPointsToast]);
+
+  // Apply disciplinary penalty (-10, -5, -20, or custom)
+  const handleApplyPenalty = useCallback((penaltyPoints: number, reason: string, questId?: string) => {
+    soundEffects.playPenaltySound();
+    triggerPointsToast(penaltyPoints, `Штраф: ${reason}`, true);
+
+    setProfile((prev) => ({
+      ...prev,
+      points: Math.max(0, prev.points - penaltyPoints),
+      totalPenalties: (prev.totalPenalties || 0) + penaltyPoints,
+    }));
+
+    setLogs((prev) => [
+      {
+        id: `log-penalty-${Date.now()}`,
+        timestamp: Date.now(),
+        type: 'penalty',
+        title: `Штраф: ${reason}`,
+        details: `Списано -${penaltyPoints} б. за нарушение дисциплины`,
+        pointsChange: -penaltyPoints,
+      },
+      ...prev,
+    ]);
+
+    if (questId) {
+      setQuests((prev) =>
+        prev.map((q) => (q.id === questId ? { ...q, isPenalized: true } : q))
+      );
+    }
+  }, [triggerPointsToast]);
+
+  // Direct penalty from quest card
+  const handleQuestPenalty = useCallback((quest: Quest) => {
+    const penaltyPoints = getQuestPenaltyPoints(quest);
+    handleApplyPenalty(penaltyPoints, `${quest.cleanTitle} (просрочено)`, quest.id);
+  }, [handleApplyPenalty]);
+
+  // Reset all points and skill progress to 0
+  const handleResetProgress = useCallback(() => {
+    soundEffects.playSpendChime();
+
+    setProfile((prev) => ({
+      ...prev,
+      points: 0,
+      totalPointsEarned: 0,
+      totalPointsSpent: 0,
+      totalPenalties: 0,
+      completedQuestsCount: 0,
+    }));
+
+    setSkills((prev) =>
+      prev.map((s) => ({
+        ...s,
+        points: 0,
+      }))
+    );
+
+    setLogs((prev) => [
+      {
+        id: `log-reset-${Date.now()}`,
+        timestamp: Date.now(),
+        type: 'reset_progress',
+        title: 'Полное обнуление прогресса',
+        details: 'Все баллы и прокачка навыков сброшены до 0',
+        pointsChange: 0,
+      },
+      ...prev,
+    ]);
+
+    triggerPointsToast(0, 'Прогресс полностью обнулен', false);
+  }, [triggerPointsToast]);
+
+  // Automatically rollover completed recurring tasks when their scheduled time/date arrives
+  const checkRecurringRollovers = useCallback(() => {
+    const now = Date.now();
+    const todayDateStr = getAstanaDateString(now);
+
+    setQuests((prevQuests) => {
+      let hasChanges = false;
+      const updated = prevQuests.map((q) => {
+        if (q.isRecurring && q.isCompleted) {
+          const isDueForReset = q.nextScheduledDate
+            ? now >= q.nextScheduledDate
+            : todayDateStr !== q.lastCompletedDate;
+
+          if (isDueForReset) {
+            hasChanges = true;
+            const newDeadline =
+              q.nextScheduledDate ||
+              getNextRecurringDeadline(
+                q.deadlineTimestamp,
+                q.recurrenceType || 'daily',
+                q.recurrenceDays || 1,
+                q.recurrenceWeekdays || [1, 2, 3, 4, 5],
+                q.recurrenceTime || '23:00'
+              );
+            return {
+              ...q,
+              isCompleted: false,
+              deadlineTimestamp: newDeadline,
+              localDeadline: formatToAstanaTime(newDeadline),
+              nextScheduledDate: undefined,
+            };
+          }
+        }
+        return q;
+      });
+      return hasChanges ? updated : prevQuests;
+    });
+  }, []);
+
+  useEffect(() => {
+    checkRecurringRollovers();
+    const interval = setInterval(checkRecurringRollovers, 30000);
+    return () => clearInterval(interval);
+  }, [checkRecurringRollovers]);
+
+  // Account switching and creation helpers
+  const handleSelectAccount = useCallback((username: string) => {
+    const cleanNick = username.trim();
+    if (!cleanNick) return;
+
+    // Flush current state to storage before switching
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'profile'), JSON.stringify(profile));
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'skills'), JSON.stringify(skills));
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'quests'), JSON.stringify(quests));
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'deleted_ids'), JSON.stringify(deletedQuestIds));
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'logs'), JSON.stringify(logs));
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'moodle_url'), moodleUrl);
+
+    // Update lastLoginAt
+    setAccounts((prev) =>
+      prev.map((a) =>
+        a.username.toLowerCase() === cleanNick.toLowerCase()
+          ? { ...a, lastLoginAt: Date.now() }
+          : a
+      )
+    );
+
+    // Load data for selected user
+    try {
+      const pSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'profile'));
+      const sSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'skills'));
+      const qSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'quests'));
+      const dSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'deleted_ids'));
+      const lSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'logs'));
+      const mSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'moodle_url'));
+
+      setProfile(pSaved ? JSON.parse(pSaved) : { ...DEFAULT_PROFILE, name: cleanNick });
+      setSkills(sSaved ? JSON.parse(sSaved) : INITIAL_SKILLS);
+      setQuests(qSaved ? JSON.parse(qSaved) : getInitialQuests());
+      setDeletedQuestIds(dSaved ? JSON.parse(dSaved) : []);
+      setLogs(lSaved ? JSON.parse(lSaved) : []);
+      setMoodleUrl(mSaved || '');
+    } catch {
+      // fallback
+    }
+
+    setCurrentUsername(cleanNick);
+  }, [currentUsername, profile, skills, quests, deletedQuestIds, logs, moodleUrl]);
+
+  const handleCreateAccount = useCallback((username: string) => {
+    const cleanNick = username.trim();
+    if (!cleanNick) return;
+
+    // Flush current state before creating
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'profile'), JSON.stringify(profile));
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'skills'), JSON.stringify(skills));
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'quests'), JSON.stringify(quests));
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'deleted_ids'), JSON.stringify(deletedQuestIds));
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'logs'), JSON.stringify(logs));
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'moodle_url'), moodleUrl);
+
+    const newAcc: UserAccount = {
+      username: cleanNick,
+      createdAt: Date.now(),
+      lastLoginAt: Date.now(),
+    };
+
+    setAccounts((prev) => {
+      const filtered = prev.filter((a) => a.username.toLowerCase() !== cleanNick.toLowerCase());
+      return [newAcc, ...filtered];
+    });
+
+    const newProfile: UserProfile = {
+      ...DEFAULT_PROFILE,
+      name: cleanNick,
+    };
+    const newQuests = getInitialQuests();
+    const newSkills = INITIAL_SKILLS;
+    const newLogs: ActivityLogItem[] = [
+      {
+        id: `log-create-acc-${Date.now()}`,
+        timestamp: Date.now(),
+        type: 'sync',
+        title: `Создан аккаунт «${cleanNick}»`,
+        details: 'Успешная регистрация по никнейму. Балансировка: до 200 баллов/неделя.',
+        pointsChange: 0,
+      },
+    ];
+
+    setCurrentUsername(cleanNick);
+    setProfile(newProfile);
+    setQuests(newQuests);
+    setSkills(newSkills);
+    setDeletedQuestIds([]);
+    setLogs(newLogs);
+    setMoodleUrl('');
+
+    // Persist immediately
+    localStorage.setItem(getAccountStorageKey(cleanNick, 'profile'), JSON.stringify(newProfile));
+    localStorage.setItem(getAccountStorageKey(cleanNick, 'skills'), JSON.stringify(newSkills));
+    localStorage.setItem(getAccountStorageKey(cleanNick, 'quests'), JSON.stringify(newQuests));
+    localStorage.setItem(getAccountStorageKey(cleanNick, 'deleted_ids'), JSON.stringify([]));
+    localStorage.setItem(getAccountStorageKey(cleanNick, 'logs'), JSON.stringify(newLogs));
+    localStorage.setItem(getAccountStorageKey(cleanNick, 'moodle_url'), '');
+    localStorage.setItem(STORAGE_KEYS.ACTIVE_USER, cleanNick);
+  }, [currentUsername, profile, skills, quests, deletedQuestIds, logs, moodleUrl]);
+
+  const handleDeleteAccount = useCallback((username: string) => {
+    if (accounts.length <= 1) return;
+    const cleanNick = username.trim();
+
+    localStorage.removeItem(getAccountStorageKey(cleanNick, 'profile'));
+    localStorage.removeItem(getAccountStorageKey(cleanNick, 'skills'));
+    localStorage.removeItem(getAccountStorageKey(cleanNick, 'quests'));
+    localStorage.removeItem(getAccountStorageKey(cleanNick, 'deleted_ids'));
+    localStorage.removeItem(getAccountStorageKey(cleanNick, 'logs'));
+    localStorage.removeItem(getAccountStorageKey(cleanNick, 'moodle_url'));
+
+    const remaining = accounts.filter((a) => a.username.toLowerCase() !== cleanNick.toLowerCase());
+    setAccounts(remaining);
+
+    if (currentUsername.toLowerCase() === cleanNick.toLowerCase() && remaining.length > 0) {
+      handleSelectAccount(remaining[0].username);
+    }
+  }, [accounts, currentUsername, handleSelectAccount]);
+
+  // Save edited quest (modifies all parameters: title, deadline, course, points, difficulty, recurring)
+  const handleSaveEditedQuest = useCallback((updatedQuest: Quest) => {
+    setQuests((prev) => prev.map((q) => (q.id === updatedQuest.id ? updatedQuest : q)));
+
+    setLogs((prevLogs) => [
+      {
+        id: `log-edit-${Date.now()}`,
+        timestamp: Date.now(),
+        type: 'quest_edit',
+        title: `Изменено: ${updatedQuest.cleanTitle}`,
+        details: `Дедлайн: ${updatedQuest.localDeadline}, Награда: ${updatedQuest.points} б.`,
+        pointsChange: 0,
+      },
+      ...prevLogs,
+    ]);
   }, []);
 
   // Delete a quest
@@ -330,7 +730,7 @@ export default function App() {
             type: 'quest_delete',
             title: `Удалено задание: ${target.cleanTitle}`,
             details: `Курс: ${target.courseName}`,
-            expGained: 0,
+            pointsChange: 0,
           },
           ...prevLogs,
         ]);
@@ -339,105 +739,68 @@ export default function App() {
     });
 
     setDeletedQuestIds((prev) => (prev.includes(questId) ? prev : [...prev, questId]));
-  }, []);
 
-  // Change quest difficulty rank (S, A, B, C, D, E, F)
-  const handleChangeQuestDifficulty = useCallback((questId: string, rank: QuestRank) => {
-    const newBaseExp = QUEST_RANKS[rank].exp;
-    setQuests((prev) =>
-      prev.map((q) => (q.id === questId ? { ...q, difficulty: rank, baseExp: newBaseExp } : q))
-    );
-  }, []);
+    if (editingQuest?.id === questId) {
+      setEditingQuest(null);
+    }
+  }, [editingQuest]);
 
-  // Toggle subquest checkbox
-  const handleToggleSubquest = useCallback((questId: string, subquestId: string) => {
-    setQuests((prev) =>
-      prev.map((q) => {
-        if (q.id !== questId) return q;
-
-        const updatedSubs = q.subquests.map((sq) => {
-          if (sq.id !== subquestId) return sq;
-          const nextState = !sq.isCompleted;
-
-          if (nextState) {
-            soundEffects.playSubquestCheck();
-            awardExp(sq.exp, `Шаг квеста: ${sq.text}`, q.linkedSkillId);
-
-            setLogs((prevLogs) => [
-              {
-                id: `log-sq-${Date.now()}`,
-                timestamp: Date.now(),
-                type: 'subquest_complete',
-                title: `Выполнен шаг: ${sq.text}`,
-                details: `В квесте: ${q.cleanTitle}`,
-                expGained: sq.exp,
-                skillId: q.linkedSkillId,
-              },
-              ...prevLogs,
-            ]);
-          }
-
-          return { ...sq, isCompleted: nextState };
-        });
-
-        return { ...q, subquests: updatedSubs };
-      })
-    );
-  }, [awardExp]);
-
-  // Add subquest
-  const handleAddSubquest = useCallback((questId: string, text: string) => {
-    setQuests((prev) =>
-      prev.map((q) => {
-        if (q.id !== questId) return q;
-        const newSub: SubQuest = {
-          id: `${questId}-sub-${Date.now()}`,
-          text,
-          isCompleted: false,
-          exp: 20,
-        };
-        return { ...q, subquests: [...q.subquests, newSub] };
-      })
-    );
-  }, []);
-
-  // Delete subquest
-  const handleDeleteSubquest = useCallback((questId: string, subquestId: string) => {
-    setQuests((prev) =>
-      prev.map((q) => {
-        if (q.id !== questId) return q;
-        return { ...q, subquests: q.subquests.filter((s) => s.id !== subquestId) };
-      })
-    );
-  }, []);
-
-  // Change linked skill for a quest
-  const handleChangeLinkedSkill = useCallback((questId: string, skillId: string) => {
-    setQuests((prev) =>
-      prev.map((q) => (q.id === questId ? { ...q, linkedSkillId: skillId } : q))
-    );
-  }, []);
-
-  // Add user-created custom skill
-  const handleAddSkill = useCallback((newSkillData: Omit<Skill, 'id' | 'level' | 'exp' | 'maxExp'>) => {
+  // Skills management: Add, Edit, Delete
+  const handleAddSkill = useCallback((newSkillData: Omit<Skill, 'id' | 'points'>) => {
     const newSkill: Skill = {
       ...newSkillData,
       id: `skill-${Date.now()}`,
-      level: 1,
-      exp: 0,
-      maxExp: 150,
+      points: 0,
     };
     setSkills((prev) => [...prev, newSkill]);
     setLogs((prev) => [
       {
         id: `log-sk-create-${Date.now()}`,
         timestamp: Date.now(),
-        type: 'sync',
+        type: 'skill_create',
         title: `Создан новый навык: ${newSkill.name}`,
-        expGained: 0,
+        pointsChange: 0,
       },
       ...prev,
     ]);
+  }, []);
+
+  const handleEditSkill = useCallback((updatedSkill: Skill) => {
+    setSkills((prev) => prev.map((s) => (s.id === updatedSkill.id ? updatedSkill : s)));
+    setLogs((prev) => [
+      {
+        id: `log-sk-edit-${Date.now()}`,
+        timestamp: Date.now(),
+        type: 'skill_edit',
+        title: `Отредактирован навык: ${updatedSkill.name}`,
+        pointsChange: 0,
+      },
+      ...prev,
+    ]);
+  }, []);
+
+  const handleDeleteSkill = useCallback((skillId: string) => {
+    setSkills((prev) => {
+      const target = prev.find((s) => s.id === skillId);
+      if (target) {
+        setLogs((prevLogs) => [
+          {
+            id: `log-sk-del-${Date.now()}`,
+            timestamp: Date.now(),
+            type: 'skill_delete',
+            title: `Удален навык: ${target.name}`,
+            pointsChange: 0,
+          },
+          ...prevLogs,
+        ]);
+      }
+      return prev.filter((s) => s.id !== skillId);
+    });
+
+    // Unlink quests that pointed to this skill
+    setQuests((prev) =>
+      prev.map((q) => (q.linkedSkillId === skillId ? { ...q, linkedSkillId: '' } : q))
+    );
   }, []);
 
   // Add user-created custom quest
@@ -448,9 +811,9 @@ export default function App() {
         id: `log-q-create-${Date.now()}`,
         timestamp: Date.now(),
         type: 'quest_create',
-        title: `Создан новый квест: ${newQuest.cleanTitle}`,
-        details: `Дедлайн: ${newQuest.localDeadline}`,
-        expGained: 0,
+        title: `Создано задание: ${newQuest.cleanTitle}`,
+        details: `Дедлайн: ${newQuest.localDeadline} (+${newQuest.points} б.)`,
+        pointsChange: 0,
       },
       ...prev,
     ]);
@@ -516,12 +879,21 @@ export default function App() {
         type: 'sync',
         title: `Синхронизация с Moodle LMS завершена`,
         details: `Актуализировано ${parsed.length} академических заданий`,
-        expGained: 0,
+        pointsChange: 0,
       },
       ...prev,
     ]);
 
     return { success: true, count: parsed.length };
+  };
+
+  // 1-Click Direct Sync Handler: Immediately syncs without opening the configuration modal
+  const handleDirectSync = async () => {
+    if (!moodleUrl || !moodleUrl.trim()) {
+      setIsSyncModalOpen(true);
+      return;
+    }
+    await handleSyncFromUrl(moodleUrl);
   };
 
   // Import raw text / dropped file
@@ -547,7 +919,7 @@ export default function App() {
         type: 'sync',
         title: 'Импорт файла расписания Moodle',
         details: `Импортировано ${parsed.length} заданий`,
-        expGained: 0,
+        pointsChange: 0,
       },
       ...prev,
     ]);
@@ -555,12 +927,12 @@ export default function App() {
     return { success: true, count: parsed.length };
   };
 
-  // Reset to default authentic sample calendar
+  // Reset to default balanced schedule
   const handleResetToDefault = () => {
     setDeletedQuestIds([]);
     setMoodleUrl(DEFAULT_MOODLE_URL);
-    const parsed = parseMoodleIcs(DEFAULT_ICS_DATA, {}, new Set());
-    setQuests(parsed);
+    const initial = getInitialQuests();
+    setQuests(initial);
     setProfile((prev) => ({ ...prev, lastSyncTimestamp: Date.now() }));
   };
 
@@ -573,6 +945,11 @@ export default function App() {
     return Array.from(set);
   }, [quests]);
 
+  // Today's Agenda Quests (Досуг и задачи на сегодня: Сон до 23:00, Тренировка, Бег, Задание по SDP)
+  const todayAgendaQuests = useMemo(() => {
+    return quests.filter((q) => isTaskScheduledForToday(q));
+  }, [quests]);
+
   // Filtered and sorted quests
   const filteredQuests = useMemo(() => {
     return quests
@@ -580,6 +957,10 @@ export default function App() {
         if (filters.searchQuery) {
           const qText = `${q.cleanTitle} ${q.description} ${q.courseName} ${q.instructor}`.toLowerCase();
           if (!qText.includes(filters.searchQuery.toLowerCase())) return false;
+        }
+
+        if (filters.status === 'today') {
+          return isTaskScheduledForToday(q);
         }
 
         const status = getQuestStatus(q);
@@ -597,7 +978,11 @@ export default function App() {
       .sort((a, b) => {
         if (filters.sortBy === 'deadline_asc') return a.deadlineTimestamp - b.deadlineTimestamp;
         if (filters.sortBy === 'deadline_desc') return b.deadlineTimestamp - a.deadlineTimestamp;
-        if (filters.sortBy === 'exp_desc') return b.baseExp - a.baseExp;
+        if (filters.sortBy === 'points_desc') {
+          const pA = a.points || 0;
+          const pB = b.points || 0;
+          return pB - pA;
+        }
         if (filters.sortBy === 'title') return a.cleanTitle.localeCompare(b.cleanTitle);
         return 0;
       });
@@ -605,19 +990,22 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col font-sans transition-colors duration-200">
-      {/* Top Bar with 2 themes */}
+      {/* Top Bar with 2 themes & Points balance & Account switcher & Penalties */}
       <TopBar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         currentTheme={theme}
         onToggleTheme={handleToggleTheme}
         isSyncing={isSyncing}
+        onDirectSync={handleDirectSync}
         onOpenSyncModal={() => setIsSyncModalOpen(true)}
         soundEnabled={profile.soundEnabled}
         onToggleSound={() => setProfile((p) => ({ ...p, soundEnabled: !p.soundEnabled }))}
-        playerLevel={profile.level}
-        playerExp={profile.exp}
-        maxExp={profile.maxExp}
+        points={profile.points}
+        onOpenSpendModal={() => setIsSpendModalOpen(true)}
+        currentUsername={currentUsername}
+        onOpenAccountModal={() => setIsAccountModalOpen(true)}
+        onOpenPenaltyModal={() => setIsPenaltyModalOpen(true)}
       />
 
       {/* Main Content */}
@@ -627,11 +1015,92 @@ export default function App() {
           quests={quests}
           onUpdateProfile={(updated) => setProfile((prev) => ({ ...prev, ...updated }))}
           onOpenNewQuestModal={() => setIsNewQuestModalOpen(true)}
+          onOpenSpendModal={() => setIsSpendModalOpen(true)}
+          onOpenAccountModal={() => setIsAccountModalOpen(true)}
+          onOpenResetModal={() => setIsResetProgressModalOpen(true)}
+          onOpenPenaltyModal={() => setIsPenaltyModalOpen(true)}
         />
 
         {/* Tab 1: Quests List */}
         {activeTab === 'quests' && (
           <div className="space-y-6">
+            {/* Досуг и задачи дня (Today's Agenda Widget) */}
+            <div
+              className="rounded-2xl border p-4 sm:p-5 shadow-sm transition-all"
+              style={{
+                backgroundColor: 'var(--bg-surface)',
+                borderColor: 'var(--border-subtle)',
+              }}
+            >
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-3.5 pb-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div>
+                  <h2 className="text-base sm:text-lg font-bold text-[var(--text-main)] flex items-center gap-2">
+                    <Sun className="w-5 h-5 text-amber-500" />
+                    <span>Досуг и задачи на сегодня</span>
+                    <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                      {todayAgendaQuests.length} в плане
+                    </span>
+                  </h2>
+                  <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                    Сон до 23:00, тренировка, бег и ключевые университетские дедлайны (недельный лимит: ~200 б.)
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => setFilters((f) => ({ ...f, status: f.status === 'today' ? 'all' : 'today' }))}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+                    filters.status === 'today'
+                      ? 'bg-[var(--accent-primary)] text-white shadow-sm'
+                      : 'text-[var(--text-main)] hover:border-[var(--accent-primary)]'
+                  }`}
+                  style={{ borderColor: 'var(--border-subtle)' }}
+                >
+                  {filters.status === 'today' ? 'Показать все задачи' : 'Фокус только на сегодня'}
+                </button>
+              </div>
+
+              {/* Quick Daily Tasks Pill Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                {todayAgendaQuests.length === 0 ? (
+                  <div className="col-span-full py-4 text-center text-xs text-[var(--text-muted)]">
+                    Все задачи на сегодня выполнены! Отличная работа.
+                  </div>
+                ) : (
+                  todayAgendaQuests.slice(0, 4).map((q) => (
+                    <div
+                      key={q.id}
+                      className="p-2.5 rounded-xl border flex items-center justify-between gap-2 transition-all hover:border-[var(--accent-primary)]"
+                      style={{
+                        backgroundColor: 'var(--bg-surface-hover)',
+                        borderColor: 'var(--border-subtle)',
+                      }}
+                    >
+                      <button
+                        onClick={() => handleCompleteQuest(q.id)}
+                        title="Отметить выполненным"
+                        className="p-1 text-[var(--text-muted)] hover:text-emerald-500 transition-colors"
+                      >
+                        <Circle className="w-4 h-4" />
+                      </button>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-bold text-[var(--text-main)] truncate">
+                          {q.cleanTitle}
+                        </div>
+                        <div className="text-[10px] text-[var(--text-muted)] font-mono truncate">
+                          {q.courseName} · {getRecurrenceDescription(q) || 'Сегодня'}
+                        </div>
+                      </div>
+
+                      <span className="text-xs font-mono font-bold text-amber-500 shrink-0">
+                        +{q.points} б.
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
             {/* Quick Moodle Link Status Bar */}
             <div
               className="rounded-2xl border p-3.5 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-sm"
@@ -650,30 +1119,31 @@ export default function App() {
                 <div className="min-w-0">
                   <div className="font-semibold text-[var(--text-main)] flex items-center gap-2">
                     <span>Подключение Moodle:</span>
-                    {moodleUrl !== DEFAULT_MOODLE_URL ? (
+                    {moodleUrl ? (
                       <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                        Ваша персональная ссылка
+                        Ссылка сохранена
                       </span>
                     ) : (
-                      <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-blue-500/10 text-blue-500 border border-blue-500/20">
-                        Демо-календарь AITU
+                      <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-slate-500/10 text-[var(--text-muted)] border border-slate-500/20">
+                        Ссылка не настроена
                       </span>
                     )}
                   </div>
                   <div className="text-[11px] text-[var(--text-muted)] truncate max-w-xs sm:max-w-lg font-mono mt-0.5">
-                    {moodleUrl}
+                    {moodleUrl || 'Нажмите кнопку справа для ввода персональной ссылки Moodle'}
                   </div>
                 </div>
               </div>
 
               <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
                 <button
-                  onClick={() => setIsSyncModalOpen(true)}
-                  className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-white shadow-sm transition-all active:scale-95 flex items-center gap-1.5"
+                  onClick={handleDirectSync}
+                  disabled={isSyncing}
+                  className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-white shadow-sm transition-all active:scale-95 flex items-center gap-1.5 disabled:opacity-75"
                   style={{ backgroundColor: 'var(--accent-primary)' }}
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>Вставить свою ссылку / Обновить</span>
+                  <span>{isSyncing ? 'Синхронизация...' : 'Синхронизировать сейчас'}</span>
                 </button>
               </div>
             </div>
@@ -692,7 +1162,7 @@ export default function App() {
                   <Search className="w-4 h-4 text-[var(--text-muted)] absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
-                    placeholder="Поиск по названию, курсу или преподавателю..."
+                    placeholder="Поиск по названию или предмету..."
                     value={filters.searchQuery}
                     onChange={(e) => setFilters((f) => ({ ...f, searchQuery: e.target.value }))}
                     className="w-full pl-10 pr-4 py-2 text-xs sm:text-sm rounded-xl border bg-transparent text-[var(--text-main)] placeholder-[var(--text-muted)] focus:outline-none"
@@ -728,26 +1198,27 @@ export default function App() {
                   </button>
 
                   <button
-                    onClick={() => setFilters((f) => ({ ...f, status: 'active' }))}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap ${
-                      filters.status === 'active'
-                        ? 'bg-[var(--accent-primary)] text-white shadow-sm'
-                        : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'
+                    onClick={() => setFilters((f) => ({ ...f, status: 'today' }))}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap flex items-center gap-1 ${
+                      filters.status === 'today'
+                        ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                        : 'text-amber-500 hover:text-amber-400'
                     }`}
                   >
-                    В работе
+                    <Sun className="w-3.5 h-3.5" />
+                    <span>На сегодня ({todayAgendaQuests.length})</span>
                   </button>
 
                   <button
                     onClick={() => setFilters((f) => ({ ...f, status: 'burning' }))}
                     className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap flex items-center gap-1 ${
                       filters.status === 'burning'
-                        ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                        : 'text-amber-500 hover:text-amber-400'
+                        ? 'bg-orange-500 text-white font-bold shadow-sm'
+                        : 'text-orange-500 hover:text-orange-400'
                     }`}
                   >
                     <Flame className="w-3.5 h-3.5" />
-                    <span>Горят 🔥</span>
+                    <span>Горят</span>
                   </button>
 
                   <button
@@ -759,17 +1230,6 @@ export default function App() {
                     }`}
                   >
                     Сдано
-                  </button>
-
-                  <button
-                    onClick={() => setFilters((f) => ({ ...f, status: 'failed' }))}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap ${
-                      filters.status === 'failed'
-                        ? 'bg-red-600 text-white shadow-sm'
-                        : 'text-red-500 hover:text-red-400'
-                    }`}
-                  >
-                    Просрочено
                   </button>
                 </div>
               </div>
@@ -795,21 +1255,6 @@ export default function App() {
                     ))}
                   </select>
 
-                  <span className="text-[var(--text-muted)] font-medium ml-2">Навык:</span>
-                  <select
-                    value={filters.skill}
-                    onChange={(e) => setFilters((f) => ({ ...f, skill: e.target.value }))}
-                    className="px-2.5 py-1 rounded-lg border max-w-[190px] truncate focus:outline-none"
-                    style={{ borderColor: 'var(--border-subtle)' }}
-                  >
-                    <option value="all">Все навыки</option>
-                    {skills.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-
                   <span className="text-[var(--text-muted)] font-medium ml-2">Сложность:</span>
                   <select
                     value={filters.difficulty}
@@ -820,7 +1265,7 @@ export default function App() {
                     <option value="all">Все ранги (S-F)</option>
                     {RANK_LIST.map((r) => (
                       <option key={r} value={r}>
-                        Ранг {r} (+{QUEST_RANKS[r].exp} XP)
+                        Ранг {r} (+{QUEST_RANKS[r]?.points || 5} б.)
                       </option>
                     ))}
                   </select>
@@ -837,14 +1282,14 @@ export default function App() {
                   >
                     <option value="deadline_asc">Сначала ближайшие дедлайны</option>
                     <option value="deadline_desc">Сначала поздние дедлайны</option>
-                    <option value="exp_desc">По награде (максимум XP)</option>
+                    <option value="points_desc">По награде (максимум баллов)</option>
                     <option value="title">По названию (А-Я)</option>
                   </select>
                 </div>
               </div>
             </div>
 
-            {/* Quests Grid */}
+            {/* Quests Grid - Always open, minimal info */}
             {filteredQuests.length === 0 ? (
               <div
                 className="rounded-2xl border p-12 text-center"
@@ -853,7 +1298,7 @@ export default function App() {
                 <Sparkles className="w-12 h-12 mx-auto text-[var(--accent-primary)] opacity-40 mb-3" />
                 <h3 className="font-bold text-base text-[var(--text-main)]">Задания не найдены</h3>
                 <p className="text-xs text-[var(--text-muted)] max-w-sm mx-auto mt-1">
-                  Сбросьте фильтры поиска или синхронизируйте расписание со своим Moodle LMS.
+                  Сбросьте фильтры поиска или добавьте новые задачи в свой план.
                 </p>
                 <button
                   onClick={() =>
@@ -873,7 +1318,7 @@ export default function App() {
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              <div className="space-y-2.5">
                 {filteredQuests.map((quest) => (
                   <QuestCard
                     key={quest.id}
@@ -881,12 +1326,9 @@ export default function App() {
                     skills={skills}
                     onCompleteQuest={handleCompleteQuest}
                     onUncompleteQuest={handleUncompleteQuest}
-                    onToggleSubquest={handleToggleSubquest}
-                    onAddSubquest={handleAddSubquest}
-                    onDeleteSubquest={handleDeleteSubquest}
-                    onChangeLinkedSkill={handleChangeLinkedSkill}
-                    onChangeDifficulty={handleChangeQuestDifficulty}
                     onDeleteQuest={handleDeleteQuest}
+                    onOpenEditModal={(q) => setEditingQuest(q)}
+                    onApplyPenalty={handleQuestPenalty}
                   />
                 ))}
               </div>
@@ -896,7 +1338,13 @@ export default function App() {
 
         {/* Tab 2: Skills Tree */}
         {activeTab === 'skills' && (
-          <SkillsTree skills={skills} quests={quests} onAddSkill={handleAddSkill} />
+          <SkillsTree
+            skills={skills}
+            quests={quests}
+            onAddSkill={handleAddSkill}
+            onEditSkill={handleEditSkill}
+            onDeleteSkill={handleDeleteSkill}
+          />
         )}
 
         {/* Tab 3: Timeline */}
@@ -917,20 +1365,22 @@ export default function App() {
         )}
       </main>
 
-      {/* Floating EXP Banner Toast (Solid Emerald) */}
-      {expToast && (
+      {/* Floating Points Toast Notification (+ or -) */}
+      {pointsToast && (
         <div className="fixed bottom-6 right-6 z-50 exp-float-anim pointer-events-none">
           <div
             className="px-4 py-2 rounded-xl border text-sm font-bold shadow-lg flex items-center gap-2 text-white"
             style={{
-              backgroundColor: '#10b981',
-              borderColor: '#059669',
+              backgroundColor: pointsToast.isDeduction ? '#ef4444' : '#10b981',
+              borderColor: pointsToast.isDeduction ? '#dc2626' : '#059669',
             }}
           >
-            <Sparkles className="w-4 h-4 text-amber-300" />
-            <span>+{expToast.exp} XP!</span>
+            <Coins className="w-4 h-4 text-amber-300" />
+            <span>
+              {pointsToast.isDeduction ? `-${pointsToast.points}` : `+${pointsToast.points}`} б.!
+            </span>
             <span className="text-xs font-normal opacity-90 truncate max-w-[200px]">
-              {expToast.text}
+              {pointsToast.text}
             </span>
           </div>
         </div>
@@ -948,14 +1398,20 @@ export default function App() {
         lastSyncTimestamp={profile.lastSyncTimestamp}
       />
 
-      <LevelUpModal
-        isOpen={isLevelUpModalOpen}
-        level={profile.level}
-        onClose={() => setIsLevelUpModalOpen(false)}
-        unlockedPerks={profile.perksUnlocked}
-        onSelectPerk={(perkId) => {
-          setProfile((p) => ({ ...p, perksUnlocked: [...p.perksUnlocked, perkId] }));
-        }}
+      <SpendPointsModal
+        isOpen={isSpendModalOpen}
+        onClose={() => setIsSpendModalOpen(false)}
+        currentPoints={profile.points}
+        onSpendPoints={handleSpendPoints}
+      />
+
+      <EditQuestModal
+        quest={editingQuest}
+        isOpen={Boolean(editingQuest)}
+        onClose={() => setEditingQuest(null)}
+        skills={skills}
+        onSaveQuest={handleSaveEditedQuest}
+        onDeleteQuest={handleDeleteQuest}
       />
 
       <CustomQuestModal
@@ -963,6 +1419,30 @@ export default function App() {
         onClose={() => setIsNewQuestModalOpen(false)}
         skills={skills}
         onCreateQuest={handleCreateCustomQuest}
+      />
+
+      <AccountModal
+        isOpen={isAccountModalOpen}
+        onClose={() => setIsAccountModalOpen(false)}
+        currentUsername={currentUsername}
+        accounts={accounts}
+        onSelectAccount={handleSelectAccount}
+        onCreateAccount={handleCreateAccount}
+        onDeleteAccount={handleDeleteAccount}
+      />
+
+      <ResetProgressModal
+        isOpen={isResetProgressModalOpen}
+        onClose={() => setIsResetProgressModalOpen(false)}
+        currentPoints={profile.points}
+        onConfirmReset={handleResetProgress}
+      />
+
+      <PenaltyModal
+        isOpen={isPenaltyModalOpen}
+        onClose={() => setIsPenaltyModalOpen(false)}
+        currentPoints={profile.points}
+        onApplyPenalty={handleApplyPenalty}
       />
     </div>
   );

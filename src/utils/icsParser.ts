@@ -1,4 +1,4 @@
-import { Quest, QuestStatus, SubQuest, QuestRank } from '../types';
+import { Quest, QuestStatus, QuestRank } from '../types';
 import { QUEST_RANKS } from './levelMath';
 
 /**
@@ -55,6 +55,34 @@ export function formatToAstanaTime(timestamp: number): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(date);
+}
+
+/**
+ * Formats date into YYYY-MM-DDTHH:mm string for <input type="datetime-local">
+ * adjusted to local Astana timezone (UTC+5)
+ */
+export function timestampToDateTimeLocal(timestamp: number): string {
+  const date = new Date(timestamp);
+  // Astana is UTC+5 (300 minutes offset from UTC)
+  const astanaOffsetMs = 5 * 60 * 60 * 1000;
+  const localDate = new Date(date.getTime() + astanaOffsetMs);
+  const iso = localDate.toISOString(); // YYYY-MM-DDTHH:mm:ss.sssZ
+  return iso.substring(0, 16);
+}
+
+/**
+ * Converts a <input type="datetime-local"> string back to UTC epoch ms
+ * assuming the user input is in Astana time (UTC+5)
+ */
+export function dateTimeLocalToTimestamp(localStr: string): number {
+  if (!localStr) return Date.now();
+  // localStr is "YYYY-MM-DDTHH:mm"
+  const [datePart, timePart] = localStr.split('T');
+  if (!datePart || !timePart) return Date.now();
+  const [y, m, d] = datePart.split('-').map(Number);
+  const [h, min] = timePart.split(':').map(Number);
+  // Subtract 5 hours for Astana UTC+5
+  return Date.UTC(y, m - 1, d, h - 5, min, 0);
 }
 
 /**
@@ -155,7 +183,7 @@ export function matchSkillForCourse(courseName: string): string {
   if (lower.includes('language') || lower.includes('язык') || lower.includes('soft') || lower.includes('коммуникац') || lower.includes('риторик')) {
     return 'skill-softskills';
   }
-  return 'skill-general';
+  return 'skill-frontend';
 }
 
 /**
@@ -210,7 +238,6 @@ export function parseMoodleIcs(
       inEvent = false;
       const uid = currentEvent['UID'] || `quest-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
 
-      // If user explicitly deleted this quest previously, do not resurrect it
       if (deletedIdsSet.has(uid)) {
         continue;
       }
@@ -229,41 +256,24 @@ export function parseMoodleIcs(
 
       const dtStartRaw = currentEvent['DTSTART'] || currentEvent['DTEND'];
       const dtEndRaw = currentEvent['DTEND'] || currentEvent['DTSTART'];
-      const deadlineTimestamp = parseIcsDate(dtEndRaw);
+      const rawDeadlineTimestamp = parseIcsDate(dtEndRaw);
 
-      const cleanTitle = summary
+      const rawCleanTitle = summary
         .replace(/\s+is\s+due/gi, '')
         .replace(/\s+closes/gi, ' (Дедлайн)')
         .replace(/\s+opens/gi, ' (Открытие)');
 
       const existing = existingQuestsMap[uid];
 
-      // Configurable rank (S, A, B, C, D, E, F)
-      const rank: QuestRank = existing?.difficulty || determineDefaultRank(summary);
-      const baseExp = existing?.baseExp || QUEST_RANKS[rank].exp;
+      // If user edited title, description, course, or deadline, preserve custom values!
+      const cleanTitle = existing?.cleanTitle || rawCleanTitle;
+      const finalCourseName = existing?.courseName || courseName;
+      const finalDescription = existing?.description !== undefined ? existing.description : description;
+      const deadlineTimestamp = existing?.deadlineTimestamp || rawDeadlineTimestamp;
 
-      const defaultSubquests: SubQuest[] = existing?.subquests?.length
-        ? existing.subquests
-        : [
-            {
-              id: `${uid}-sub-1`,
-              text: 'Изучить требования задания и методические материалы',
-              isCompleted: false,
-              exp: 20,
-            },
-            {
-              id: `${uid}-sub-2`,
-              text: 'Выполнить практическую часть и оформить решение',
-              isCompleted: false,
-              exp: 25,
-            },
-            {
-              id: `${uid}-sub-3`,
-              text: 'Сдать отчет и загрузить файл в систему Moodle',
-              isCompleted: false,
-              exp: 20,
-            },
-          ];
+      // Configurable rank (S, A, B, C, D, E, F) and points
+      const rank: QuestRank = existing?.difficulty || determineDefaultRank(summary);
+      const points = existing?.points || QUEST_RANKS[rank]?.points || 40;
 
       const linkedSkillId = existing?.linkedSkillId || matchSkillForCourse(courseName);
 
@@ -271,9 +281,9 @@ export function parseMoodleIcs(
         id: uid,
         summary,
         cleanTitle,
-        description,
+        description: finalDescription,
         categories,
-        courseName,
+        courseName: finalCourseName,
         instructor,
         dtStart: new Date(parseIcsDate(dtStartRaw)).toISOString(),
         dtEnd: new Date(deadlineTimestamp).toISOString(),
@@ -281,11 +291,16 @@ export function parseMoodleIcs(
         deadlineTimestamp,
         isCompleted: existing ? existing.isCompleted : false,
         completedAt: existing ? existing.completedAt : undefined,
-        subquests: defaultSubquests,
         linkedSkillId,
-        baseExp,
+        points,
+        baseExp: points,
         difficulty: rank,
         isCustom: existing?.isCustom || false,
+        isRecurring: existing?.isRecurring || false,
+        recurrenceType: existing?.recurrenceType || (existing?.recurrenceInterval === 'daily' ? 'daily' : undefined),
+        recurrenceDays: existing?.recurrenceDays,
+        recurrenceWeekdays: existing?.recurrenceWeekdays,
+        completedCount: existing?.completedCount || 0,
       };
 
       quests.push(quest);
