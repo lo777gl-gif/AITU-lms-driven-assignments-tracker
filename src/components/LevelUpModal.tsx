@@ -1,14 +1,13 @@
 import React, { useEffect } from 'react';
 import confetti from 'canvas-confetti';
-import { getRankTitle, AVAILABLE_PERKS } from '../utils/levelMath';
 import { Award, Sparkles } from 'lucide-react';
 
 interface LevelUpModalProps {
   level: number;
   isOpen: boolean;
   onClose: () => void;
-  onSelectPerk: (perkId: string) => void;
-  unlockedPerks: string[];
+  onSelectPerk?: (perkId: string) => void;
+  unlockedPerks?: string[];
 }
 
 export const LevelUpModal: React.FC<LevelUpModalProps> = ({
@@ -16,7 +15,7 @@ export const LevelUpModal: React.FC<LevelUpModalProps> = ({
   isOpen,
   onClose,
   onSelectPerk,
-  unlockedPerks,
+  unlockedPerks = [],
 }) => {
   useEffect(() => {
     if (isOpen) {
@@ -35,8 +34,8 @@ export const LevelUpModal: React.FC<LevelUpModalProps> = ({
 
   if (!isOpen) return null;
 
-  const rank = getRankTitle(level);
-  const eligiblePerks = AVAILABLE_PERKS.filter((p) => p.levelRequired <= level && !unlockedPerks.includes(p.id));
+  const rank = { title: `Уровень ${level}`, tier: `${level}` };
+  const eligiblePerks: { id: string; name: string; description: string; icon: string }[] = [];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
@@ -82,7 +81,7 @@ export const LevelUpModal: React.FC<LevelUpModalProps> = ({
                 <button
                   key={perk.id}
                   onClick={() => {
-                    onSelectPerk(perk.id);
+                    onSelectPerk?.(perk.id);
                     onClose();
                   }}
                   className="w-full p-3 rounded-xl border text-left flex items-start gap-3 hover:border-[var(--accent-primary)] hover:bg-black/5 transition-all"

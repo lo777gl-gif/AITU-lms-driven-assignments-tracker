@@ -332,3 +332,98 @@ export function getQuestStatus(quest: Quest): QuestStatus {
   if (quest.deadlineTimestamp - now < 48 * 3600 * 1000) return 'burning';
   return 'active';
 }
+
+/**
+ * Merges newly parsed LMS quests with existing quests so that:
+ * 1. ALL previously created/custom tasks (isCustom: true, habit-*, custom-quest-*, or any user-created tasks) are preserved.
+ * 2. Pre-existing tasks that are not present in the current LMS feed remain untouched (unless previously deleted by user).
+ * 3. Deleted tasks (deletedIdsSet) are never revived.
+ * 4. Existing tasks that match an LMS event (by ID or by title+course) are updated with current LMS schedule/links while preserving user-customized points, difficulty, notes, completion status, and linked skills.
+ * 5. Incoming new LMS tasks are added.
+ */
+export function mergeQuestsWithLms(
+  existingQuests: Quest[],
+  lmsQuests: Quest[],
+  deletedIdsSet: Set<string> = new Set()
+): Quest[] {
+  // Exclude any task that user previously deleted
+  const filteredExisting = existingQuests.filter((q) => !deletedIdsSet.has(q.id));
+
+  // Build lookup maps for fast matching
+  const existingById = new Map<string, Quest>();
+  const existingByKey = new Map<string, Quest>();
+
+  filteredExisting.forEach((q) => {
+    existingById.set(q.id, q);
+    const key = `${(q.cleanTitle || '').trim().toLowerCase()}|||${(q.courseName || '').trim().toLowerCase()}`;
+    existingByKey.set(key, q);
+  });
+
+  const mergedList: Quest[] = [];
+  const processedExistingIds = new Set<string>();
+
+  // Process incoming LMS items
+  for (const lmsQ of lmsQuests) {
+    if (deletedIdsSet.has(lmsQ.id)) {
+      continue;
+    }
+
+    const key = `${(lmsQ.cleanTitle || '').trim().toLowerCase()}|||${(lmsQ.courseName || '').trim().toLowerCase()}`;
+    const existing = existingById.get(lmsQ.id) || existingByKey.get(key);
+
+    if (existing) {
+      processedExistingIds.add(existing.id);
+
+      // Preserve existing user state & properties
+      mergedList.push({
+        ...lmsQ,
+        id: existing.id,
+        cleanTitle: existing.cleanTitle || lmsQ.cleanTitle,
+        description:
+          existing.description !== undefined && existing.description !== ''
+            ? existing.description
+            : lmsQ.description,
+        courseName: existing.courseName || lmsQ.courseName,
+        isCompleted: existing.isCompleted,
+        completedAt: existing.completedAt,
+        lastCompletedDate: existing.lastCompletedDate,
+        nextScheduledDate: existing.nextScheduledDate,
+        completedCount: existing.completedCount || 0,
+        linkedSkillId: existing.linkedSkillId !== undefined ? existing.linkedSkillId : lmsQ.linkedSkillId,
+        points: existing.points || lmsQ.points,
+        baseExp: existing.baseExp || lmsQ.baseExp,
+        difficulty: existing.difficulty || lmsQ.difficulty,
+        isCustom: existing.isCustom,
+        isRecurring: existing.isRecurring,
+        recurrenceType: existing.recurrenceType,
+        recurrenceInterval: existing.recurrenceInterval,
+        recurrenceDays: existing.recurrenceDays,
+        recurrenceWeekdays: existing.recurrenceWeekdays,
+        recurrenceTime: existing.recurrenceTime,
+        isTodayAgenda: existing.isTodayAgenda,
+        isPenalized: existing.isPenalized,
+        // Schedule: if user manually edited the quest or if LMS provides fresh timestamp, update
+        deadlineTimestamp: lmsQ.deadlineTimestamp || existing.deadlineTimestamp,
+        localDeadline: lmsQ.localDeadline || existing.localDeadline,
+        dtStart: lmsQ.dtStart || existing.dtStart,
+        dtEnd: lmsQ.dtEnd || existing.dtEnd,
+      });
+    } else {
+      // Brand new LMS quest
+      mergedList.push(lmsQ);
+    }
+  }
+
+  // CRITICAL: Preserve ALL previously existing tasks that were not in the LMS feed!
+  // This guarantees user-created tasks, habits, and any prior assignments NEVER disappear!
+  for (const q of filteredExisting) {
+    if (!processedExistingIds.has(q.id)) {
+      mergedList.push(q);
+    }
+  }
+
+  // Sort by deadline timestamp
+  mergedList.sort((a, b) => a.deadlineTimestamp - b.deadlineTimestamp);
+  return mergedList;
+}
+

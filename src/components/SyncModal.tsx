@@ -240,6 +240,18 @@ export const SyncModal: React.FC<SyncModalProps> = ({
           </button>
         </div>
 
+        {/* Safe synchronization banner */}
+        <div
+          className="flex items-center gap-2 p-2.5 rounded-xl mb-4 border text-[11px] text-[var(--text-muted)] leading-snug"
+          style={{
+            borderColor: 'var(--border-subtle)',
+            backgroundColor: 'var(--bg-surface-hover)',
+          }}
+        >
+          <span className="text-emerald-500 font-bold shrink-0">🛡️ Безопасный импорт:</span>
+          <span>Все ваши ранее созданные задания, привычки и личный прогресс гарантированно сохраняются.</span>
+        </div>
+
         {/* Mode 1: URL input */}
         {activeMode === 'url' && (
           <form onSubmit={handleSyncUrl} className="space-y-4">

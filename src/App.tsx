@@ -11,7 +11,7 @@ import {
 } from './types';
 import { DEFAULT_MOODLE_URL, DEFAULT_ICS_DATA, getInitialQuests } from './data/defaultCalendar';
 import { INITIAL_SKILLS } from './data/defaultSkills';
-import { parseMoodleIcs, getQuestStatus, formatToAstanaTime } from './utils/icsParser';
+import { parseMoodleIcs, mergeQuestsWithLms, getQuestStatus, formatToAstanaTime } from './utils/icsParser';
 import { soundEffects } from './utils/sound';
 import {
   QUEST_RANKS,
@@ -868,8 +868,9 @@ export default function App() {
       };
     }
 
-    const parsed = parseMoodleIcs(icsText, existingMap, deletedSet);
-    setQuests(parsed);
+    const parsedLms = parseMoodleIcs(icsText, existingMap, deletedSet);
+    const merged = mergeQuestsWithLms(quests, parsedLms, deletedSet);
+    setQuests(merged);
     setProfile((prev) => ({ ...prev, lastSyncTimestamp: Date.now() }));
 
     setLogs((prev) => [
@@ -878,13 +879,13 @@ export default function App() {
         timestamp: Date.now(),
         type: 'sync',
         title: `Синхронизация с Moodle LMS завершена`,
-        details: `Актуализировано ${parsed.length} академических заданий`,
+        details: `Синхронизировано ${parsedLms.length} заданий LMS. Все созданные задания и привычки сохранены (${merged.length} квестов всего).`,
         pointsChange: 0,
       },
       ...prev,
     ]);
 
-    return { success: true, count: parsed.length };
+    return { success: true, count: parsedLms.length };
   };
 
   // 1-Click Direct Sync Handler: Immediately syncs without opening the configuration modal
@@ -908,8 +909,9 @@ export default function App() {
     });
 
     const deletedSet = new Set<string>(deletedQuestIds);
-    const parsed = parseMoodleIcs(text, existingMap, deletedSet);
-    setQuests(parsed);
+    const parsedLms = parseMoodleIcs(text, existingMap, deletedSet);
+    const merged = mergeQuestsWithLms(quests, parsedLms, deletedSet);
+    setQuests(merged);
     setProfile((prev) => ({ ...prev, lastSyncTimestamp: Date.now() }));
 
     setLogs((prev) => [
@@ -918,13 +920,13 @@ export default function App() {
         timestamp: Date.now(),
         type: 'sync',
         title: 'Импорт файла расписания Moodle',
-        details: `Импортировано ${parsed.length} заданий`,
+        details: `Синхронизировано ${parsedLms.length} заданий LMS. Все созданные задания сохранены (${merged.length} квестов всего).`,
         pointsChange: 0,
       },
       ...prev,
     ]);
 
-    return { success: true, count: parsed.length };
+    return { success: true, count: parsedLms.length };
   };
 
   // Reset to default balanced schedule
