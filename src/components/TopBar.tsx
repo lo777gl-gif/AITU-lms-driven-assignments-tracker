@@ -1,6 +1,6 @@
 import React from 'react';
 import { ThemeId } from '../types';
-import { RefreshCw, Volume2, VolumeX, Shield, Sun, Moon, Coins, Settings, User, AlertTriangle } from 'lucide-react';
+import { RefreshCw, Volume2, VolumeX, Pencil, Sun, Moon, Coins, Settings, User, AlertTriangle } from 'lucide-react';
 
 interface TopBarProps {
   activeTab: 'quests' | 'skills' | 'timeline' | 'log';
@@ -56,7 +56,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 backgroundColor: 'var(--accent-primary)',
               }}
             >
-              <Shield className="w-5 h-5 text-white" />
+              <Pencil className="w-5 h-5 text-white" />
             </div>
             <div>
               <span className="text-base sm:text-lg font-bold tracking-tight text-[var(--text-main)] whitespace-nowrap">

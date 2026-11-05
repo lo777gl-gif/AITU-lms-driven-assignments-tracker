@@ -2,9 +2,6 @@ import React, { useState } from 'react';
 import { UserProfile, Quest } from '../types';
 import {
   Coins,
-  Flame,
-  CheckCircle,
-  Clock,
   Plus,
   Edit2,
   User,
@@ -13,6 +10,7 @@ import {
   ArrowDownRight,
   RotateCcw,
   AlertTriangle,
+  Target,
 } from 'lucide-react';
 
 interface PlayerHUDProps {
@@ -24,6 +22,7 @@ interface PlayerHUDProps {
   onOpenAccountModal: () => void;
   onOpenResetModal: () => void;
   onOpenPenaltyModal: () => void;
+  onOpenSettingsModal?: () => void;
 }
 
 export const PlayerHUD: React.FC<PlayerHUDProps> = ({
@@ -35,16 +34,10 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({
   onOpenAccountModal,
   onOpenResetModal,
   onOpenPenaltyModal,
+  onOpenSettingsModal,
 }) => {
   const [isEditingName, setIsEditingName] = useState(false);
   const [tempName, setTempName] = useState(profile.name);
-
-  const now = Date.now();
-  const activeCount = quests.filter((q) => !q.isCompleted && q.deadlineTimestamp >= now).length;
-  const burningCount = quests.filter(
-    (q) => !q.isCompleted && q.deadlineTimestamp >= now && q.deadlineTimestamp - now < 48 * 3600 * 1000
-  ).length;
-  const completedCount = quests.filter((q) => q.isCompleted).length;
 
   const handleSaveName = (e: React.FormEvent) => {
     e.preventDefault();
@@ -133,14 +126,6 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({
               )}
             </div>
 
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-muted)] mt-0.5 font-medium">
-              <span className="font-semibold text-[var(--accent-primary)]">Академический трекер</span>
-              <span aria-hidden="true">·</span>
-              <span>Балловая система</span>
-              <span aria-hidden="true">·</span>
-              <span>Астана (UTC+5)</span>
-            </div>
-
             {/* Points Summary Bar */}
             <div className="mt-3 flex flex-wrap items-center gap-2.5 sm:gap-4">
               <div
@@ -156,6 +141,25 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({
                   {profile.points} <span className="text-xs font-normal">баллов</span>
                 </span>
               </div>
+
+              {/* Weekly Target Badge (Clickable to change weekly points balance) */}
+              <button
+                type="button"
+                onClick={onOpenSettingsModal}
+                title="Настроить недельную балансировку баллов"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-mono transition-all hover:border-[var(--accent-primary)] group cursor-pointer"
+                style={{
+                  backgroundColor: 'var(--bg-surface-hover)',
+                  borderColor: 'var(--border-subtle)',
+                }}
+              >
+                <Target className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                <span className="text-[var(--text-muted)]">Цель в неделю:</span>
+                <span className="font-bold text-[var(--text-main)] group-hover:text-[var(--accent-primary)]">
+                  {profile.weeklyTargetPoints || 200} б.
+                </span>
+                <span className="text-[10px] text-[var(--accent-primary)] underline ml-0.5">изменить</span>
+              </button>
 
               <div className="flex items-center gap-3 text-xs font-mono text-[var(--text-muted)]">
                 <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400" title="Всего набрано за время учебы">
@@ -177,47 +181,11 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({
           </div>
         </div>
 
-        {/* Right: Stats & Action Buttons */}
+        {/* Right: Action Buttons */}
         <div
-          className="flex flex-wrap sm:flex-nowrap items-center gap-4 sm:gap-6 w-full lg:w-auto justify-between lg:justify-end border-t lg:border-t-0 pt-4 lg:pt-0"
-          style={{ borderColor: 'var(--border-subtle)' }}
+          className="flex flex-wrap items-center gap-2 w-full lg:w-auto justify-start lg:justify-end border-t lg:border-t-0 pt-4 lg:pt-0 shrink-0"
         >
-          {/* Metrics */}
-          <div className="grid grid-cols-3 gap-3 sm:gap-5 text-center">
-            <div>
-              <div className="text-xs text-[var(--text-muted)] flex items-center justify-center gap-1">
-                <Clock className="w-3 h-3" />
-                <span>В работе</span>
-              </div>
-              <div className="text-base sm:text-lg font-bold font-mono text-[var(--text-main)] mt-0.5">
-                {activeCount}
-              </div>
-            </div>
-
-            <div>
-              <div className="text-xs text-amber-500 flex items-center justify-center gap-1">
-                <Flame className="w-3 h-3" />
-                <span>Горят</span>
-              </div>
-              <div className="text-base sm:text-lg font-bold font-mono text-amber-500 mt-0.5">
-                {burningCount}
-              </div>
-            </div>
-
-            <div>
-              <div className="text-xs text-emerald-500 flex items-center justify-center gap-1">
-                <CheckCircle className="w-3 h-3" />
-                <span>Сдано</span>
-              </div>
-              <div className="text-base sm:text-lg font-bold font-mono text-emerald-500 mt-0.5">
-                {completedCount}
-              </div>
-            </div>
-          </div>
-
-          {/* Action Buttons: Penalty, Reset, Spend, New Quest */}
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            {/* Penalty trigger */}
+          {/* Penalty trigger */}
             <button
               onClick={onOpenPenaltyModal}
               title="Выписать штраф (сон после 23:00, пропуск тренировки/бега, срыв дедлайна)"
@@ -262,7 +230,6 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({
               <Plus className="w-4 h-4" />
               <span>Новый квест</span>
             </button>
-          </div>
         </div>
       </div>
     </div>

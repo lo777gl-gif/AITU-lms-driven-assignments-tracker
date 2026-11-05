@@ -1,4 +1,4 @@
-import { Quest, QuestRank, RecurrenceType, SpendRewardPreset } from '../types';
+import { Quest, QuestRank, RecurrenceType, SpendRewardPreset, PenaltyRule, WeeklyBalanceOption } from '../types';
 
 export interface QuestRankInfo {
   rank: QuestRank;
@@ -338,3 +338,74 @@ export const SPEND_REWARDS: SpendRewardPreset[] = [
     icon: '🏖️',
   },
 ];
+
+/**
+ * Базовые штрафы по умолчанию (с возможностью добавления и редактирования)
+ */
+export const DEFAULT_PENALTY_RULES: PenaltyRule[] = [
+  {
+    id: 'penalty-sleep',
+    title: 'Сон после 23:00',
+    description: 'Сбой режима обходится дорого, так как напрямую бьет по энергии для утренних тренировок.',
+    points: 10,
+    icon: 'moon',
+    isDefault: true,
+  },
+  {
+    id: 'penalty-workout',
+    title: 'Пропуск утренней тренировки',
+    description: 'Пропуск зарядки, ОФП или разминки перед началом учебного дня.',
+    points: 5,
+    icon: 'dumbbell',
+    isDefault: true,
+  },
+  {
+    id: 'penalty-running',
+    title: 'Пропуск бега',
+    description: 'Пропуск кардио-пробежки на свежем воздухе в запланированный день.',
+    points: 5,
+    icon: 'footprints',
+    isDefault: true,
+  },
+  {
+    id: 'penalty-deadline',
+    title: 'Срыв дедлайна по заданию из университета',
+    description: 'Учеба приносит больше всего баллов, поэтому цена прокрастинации здесь самая высокая.',
+    points: 20,
+    icon: 'graduation',
+    isDefault: true,
+  },
+];
+
+/**
+ * Доступные варианты недельной балансировки баллов
+ */
+export const WEEKLY_BALANCE_OPTIONS: WeeklyBalanceOption[] = [
+  {
+    value: 200,
+    label: '200 баллов',
+    isRecommended: true,
+    desc: 'Основной сбалансированный режим (35 б. сон + 40 б. спорт + 125 б. университет)',
+  },
+  {
+    value: 500,
+    label: '500 баллов',
+    desc: 'Умеренная нагрузка для продуктивных учебных недель',
+  },
+  {
+    value: 1000,
+    label: '1 000 баллов',
+    desc: 'Высокая интенсивность и расширенный список целей',
+  },
+  {
+    value: 5000,
+    label: '5 000 баллов',
+    desc: 'Усиленный хардкорный марафон или сессия',
+  },
+  {
+    value: 10000,
+    label: '10 000 баллов',
+    desc: 'Экстремальная шкала для масштабного трекинга',
+  },
+];
+

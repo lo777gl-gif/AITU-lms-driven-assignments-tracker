@@ -1,6 +1,21 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { DEFAULT_MOODLE_URL } from '../data/defaultCalendar';
-import { RefreshCw, Upload, Link2, FileText, CheckCircle2, AlertCircle, X, HelpCircle, ChevronDown, ChevronUp, Copy, Check } from 'lucide-react';
+import { WEEKLY_BALANCE_OPTIONS } from '../utils/levelMath';
+import {
+  RefreshCw,
+  Upload,
+  Link2,
+  FileText,
+  CheckCircle2,
+  AlertCircle,
+  X,
+  HelpCircle,
+  ChevronDown,
+  ChevronUp,
+  Target,
+  Check,
+  Settings,
+} from 'lucide-react';
 
 interface SyncModalProps {
   isOpen: boolean;
@@ -11,6 +26,9 @@ interface SyncModalProps {
   onImportIcsText: (text: string) => { success: boolean; count: number; error?: string };
   onResetToDefault: () => void;
   lastSyncTimestamp: number;
+  weeklyTargetPoints: number;
+  onUpdateWeeklyTarget: (points: number) => void;
+  initialTab?: 'balance' | 'url' | 'file' | 'paste';
 }
 
 export const SyncModal: React.FC<SyncModalProps> = ({
@@ -22,9 +40,12 @@ export const SyncModal: React.FC<SyncModalProps> = ({
   onImportIcsText,
   onResetToDefault,
   lastSyncTimestamp,
+  weeklyTargetPoints,
+  onUpdateWeeklyTarget,
+  initialTab = 'balance',
 }) => {
   const [calendarUrl, setCalendarUrl] = useState(savedUrl || DEFAULT_MOODLE_URL);
-  const [activeMode, setActiveMode] = useState<'url' | 'file' | 'paste'>('url');
+  const [activeMode, setActiveMode] = useState<'balance' | 'url' | 'file' | 'paste'>(initialTab);
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [rawText, setRawText] = useState('');
@@ -38,6 +59,12 @@ export const SyncModal: React.FC<SyncModalProps> = ({
     }
   }, [savedUrl]);
 
+  useEffect(() => {
+    if (isOpen && initialTab) {
+      setActiveMode(initialTab);
+    }
+  }, [isOpen, initialTab]);
+
   if (!isOpen) return null;
 
   const handleSyncUrl = async (e: React.FormEvent) => {
@@ -45,9 +72,7 @@ export const SyncModal: React.FC<SyncModalProps> = ({
     const targetUrl = calendarUrl.trim();
     if (!targetUrl) return;
 
-    // Save user's URL
     onSaveUrl(targetUrl);
-
     setIsLoading(true);
     setStatusMessage({ type: 'info', text: 'Загрузка и парсинг календаря Moodle...' });
 
@@ -86,7 +111,7 @@ export const SyncModal: React.FC<SyncModalProps> = ({
         }
       }
     } catch {
-      // Ignore clipboard read permission denial
+      // Ignore clipboard permission issues
     }
   };
 
@@ -138,26 +163,25 @@ export const SyncModal: React.FC<SyncModalProps> = ({
       });
       setTimeout(() => onClose(), 1200);
     } else {
-      setStatusMessage({ type: 'error', text: res.error || 'Некорректный формат iCalendar' });
+      setStatusMessage({ type: 'error', text: res.error || 'Не удалось распознать формат iCalendar' });
     }
   };
 
-  const formatLastSync = (ts: number) => {
-    if (!ts) return 'Никогда';
+  const formatLastSync = (timestamp: number) => {
+    if (!timestamp) return 'Ещё не проводилась';
     return new Intl.DateTimeFormat('ru-RU', {
       timeZone: 'Asia/Almaty',
       day: '2-digit',
       month: 'short',
       hour: '2-digit',
       minute: '2-digit',
-      second: '2-digit',
-    }).format(new Date(ts));
+    }).format(new Date(timestamp));
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
       <div
-        className="w-full max-w-xl rounded-2xl border p-6 shadow-2xl animate-scaleIn max-h-[90vh] overflow-y-auto"
+        className="w-full max-w-xl rounded-2xl border p-5 sm:p-6 shadow-2xl animate-scaleIn max-h-[90vh] overflow-y-auto"
         style={{
           backgroundColor: 'var(--bg-surface)',
           borderColor: 'var(--border-strong)',
@@ -175,11 +199,11 @@ export const SyncModal: React.FC<SyncModalProps> = ({
                 backgroundColor: 'var(--accent-primary)',
               }}
             >
-              <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
+              <Settings className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-[var(--text-main)]">
-                Подключение своего Moodle LMS
+              <h3 className="text-base sm:text-lg font-bold text-[var(--text-main)]">
+                Настройки и Moodle LMS
               </h3>
               <div className="text-xs text-[var(--text-muted)] font-mono">
                 Синхронизировано: {formatLastSync(lastSyncTimestamp)} (Астана, UTC+5)
@@ -197,27 +221,39 @@ export const SyncModal: React.FC<SyncModalProps> = ({
 
         {/* Tab selection */}
         <div
-          className="flex items-center gap-2 p-1 rounded-xl my-4 border"
+          className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1 rounded-xl my-4 border"
           style={{
             borderColor: 'var(--border-subtle)',
             backgroundColor: 'var(--bg-surface-hover)',
           }}
         >
           <button
+            onClick={() => setActiveMode('balance')}
+            className={`flex items-center justify-center gap-1.5 py-2 px-2 text-xs font-semibold rounded-lg transition-all ${
+              activeMode === 'balance'
+                ? 'bg-[var(--accent-primary)] text-white shadow-sm'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'
+            }`}
+          >
+            <Target className="w-3.5 h-3.5" />
+            <span>Балансировка</span>
+          </button>
+
+          <button
             onClick={() => setActiveMode('url')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold rounded-lg transition-all ${
+            className={`flex items-center justify-center gap-1.5 py-2 px-2 text-xs font-semibold rounded-lg transition-all ${
               activeMode === 'url'
                 ? 'bg-[var(--accent-primary)] text-white shadow-sm'
                 : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'
             }`}
           >
             <Link2 className="w-3.5 h-3.5" />
-            <span>Ссылка на ваш Moodle</span>
+            <span>Moodle URL</span>
           </button>
 
           <button
             onClick={() => setActiveMode('file')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold rounded-lg transition-all ${
+            className={`flex items-center justify-center gap-1.5 py-2 px-2 text-xs font-semibold rounded-lg transition-all ${
               activeMode === 'file'
                 ? 'bg-[var(--accent-primary)] text-white shadow-sm'
                 : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'
@@ -229,14 +265,14 @@ export const SyncModal: React.FC<SyncModalProps> = ({
 
           <button
             onClick={() => setActiveMode('paste')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold rounded-lg transition-all ${
+            className={`flex items-center justify-center gap-1.5 py-2 px-2 text-xs font-semibold rounded-lg transition-all ${
               activeMode === 'paste'
                 ? 'bg-[var(--accent-primary)] text-white shadow-sm'
                 : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'
             }`}
           >
             <FileText className="w-3.5 h-3.5" />
-            <span>Вставить текст</span>
+            <span>Текст</span>
           </button>
         </div>
 
@@ -248,13 +284,79 @@ export const SyncModal: React.FC<SyncModalProps> = ({
             backgroundColor: 'var(--bg-surface-hover)',
           }}
         >
-          <span className="text-emerald-500 font-bold shrink-0">🛡️ Безопасный импорт:</span>
-          <span>Все ваши ранее созданные задания, привычки и личный прогресс гарантированно сохраняются.</span>
+          <span className="text-emerald-500 font-bold shrink-0">🛡️ Безопасное сохранение:</span>
+          <span>Все ваши созданные задания, привычки, установленные штрафы и заработанный прогресс надежно сохраняются.</span>
         </div>
 
-        {/* Mode 1: URL input */}
+        {/* Tab 1: Weekly Points Balancing Configuration */}
+        {activeMode === 'balance' && (
+          <div className="space-y-3.5 animate-fadeIn">
+            <div>
+              <h4 className="text-xs font-bold text-[var(--text-main)] uppercase tracking-wider flex items-center gap-1.5">
+                <Target className="w-4 h-4 text-[var(--accent-primary)]" />
+                <span>Рекомендованная недельная балансировка баллов</span>
+              </h4>
+              <p className="text-xs text-[var(--text-muted)] mt-1 leading-relaxed">
+                Задайте желаемый недельный ориентир для вашей программы. Основной рекомендованный режим составляет <strong>200 баллов</strong> в неделю.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              {WEEKLY_BALANCE_OPTIONS.map((opt) => {
+                const isSelected = (weeklyTargetPoints || 200) === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => {
+                      onUpdateWeeklyTarget(opt.value);
+                      setStatusMessage({
+                        type: 'success',
+                        text: `Недельная цель обновлена: ${opt.label}!`,
+                      });
+                      setTimeout(() => setStatusMessage(null), 2000);
+                    }}
+                    className={`w-full p-3 rounded-xl border text-left flex items-center justify-between gap-3 transition-all ${
+                      isSelected
+                        ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/10 shadow-sm'
+                        : 'border-[var(--border-subtle)] bg-[var(--bg-surface-hover)] hover:border-[var(--border-strong)]'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-[var(--text-main)] font-mono">
+                          {opt.label}
+                        </span>
+                        {opt.isRecommended && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-500/15 text-emerald-500 border border-emerald-500/30">
+                            Основное / Рекомендуемое
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-[var(--text-muted)] mt-0.5 leading-snug">
+                        {opt.desc}
+                      </p>
+                    </div>
+
+                    <div
+                      className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 transition-all ${
+                        isSelected
+                          ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)] text-white'
+                          : 'border-[var(--border-subtle)]'
+                      }`}
+                    >
+                      {isSelected && <Check className="w-3 h-3 text-white" />}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Tab 2: URL input */}
         {activeMode === 'url' && (
-          <form onSubmit={handleSyncUrl} className="space-y-4">
+          <form onSubmit={handleSyncUrl} className="space-y-4 animate-fadeIn">
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-xs font-semibold text-[var(--text-main)]">
@@ -348,9 +450,9 @@ export const SyncModal: React.FC<SyncModalProps> = ({
           </form>
         )}
 
-        {/* Mode 2: Drag and drop file */}
+        {/* Tab 3: Drag and drop file */}
         {activeMode === 'file' && (
-          <div className="space-y-4">
+          <div className="space-y-4 animate-fadeIn">
             <div
               onDragOver={(e) => {
                 e.preventDefault();
@@ -380,47 +482,52 @@ export const SyncModal: React.FC<SyncModalProps> = ({
                 Перетащите файл календаря (.ics) сюда
               </div>
               <p className="text-xs text-[var(--text-muted)] mt-1">
-                или нажмите для выбора файла на вашем компьютере
+                или нажмите для выбора файла на устройстве
               </p>
             </div>
           </div>
         )}
 
-        {/* Mode 3: Paste text */}
+        {/* Tab 4: Paste raw text */}
         {activeMode === 'paste' && (
-          <form onSubmit={handlePasteSubmit} className="space-y-4">
+          <form onSubmit={handlePasteSubmit} className="space-y-4 animate-fadeIn">
             <div>
               <label className="block text-xs font-semibold text-[var(--text-main)] mb-1">
-                Вставьте содержимое файла iCalendar (начиная с BEGIN:VCALENDAR)
+                Вставьте содержимое файла календаря (BEGIN:VCALENDAR...)
               </label>
               <textarea
-                rows={7}
+                rows={6}
                 value={rawText}
                 onChange={(e) => setRawText(e.target.value)}
-                placeholder="BEGIN:VCALENDAR&#10;VERSION:2.0&#10;BEGIN:VEVENT..."
+                placeholder="BEGIN:VCALENDAR&#10;VERSION:2.0&#10;PRODID:-//Moodle..."
                 className="w-full px-3 py-2 rounded-xl text-xs border bg-transparent text-[var(--text-main)] font-mono focus:outline-none"
                 style={{ borderColor: 'var(--border-subtle)' }}
               />
             </div>
+
             <button
               type="submit"
-              className="w-full py-2.5 rounded-xl text-xs font-bold text-white shadow-sm"
-              style={{ backgroundColor: 'var(--accent-primary)' }}
+              disabled={!rawText.trim()}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold text-white shadow-sm transition-all active:scale-95 disabled:opacity-50"
+              style={{
+                backgroundColor: 'var(--accent-primary)',
+              }}
             >
-              Распарсить и обновить задания
+              <FileText className="w-4 h-4" />
+              <span>Распознать и импортировать</span>
             </button>
           </form>
         )}
 
-        {/* Status Alert */}
+        {/* Status Message Alert */}
         {statusMessage && (
           <div
-            className={`mt-4 p-3 rounded-xl border text-xs flex items-center gap-2.5 ${
+            className={`mt-4 p-3 rounded-xl border flex items-center gap-2 text-xs animate-fadeIn ${
               statusMessage.type === 'success'
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500 font-medium'
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
                 : statusMessage.type === 'error'
-                ? 'bg-red-500/10 border-red-500/30 text-red-500 font-medium'
-                : 'bg-blue-500/10 border-blue-500/30 text-blue-500 font-medium'
+                ? 'bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-400'
+                : 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400'
             }`}
           >
             {statusMessage.type === 'success' ? (

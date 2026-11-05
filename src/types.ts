@@ -70,6 +70,22 @@ export interface Skill {
   courseKeywords: string[]; // Keywords to auto-match course name
 }
 
+export interface PenaltyRule {
+  id: string;
+  title: string;
+  description: string;
+  points: number; // e.g. 5, 10, 20
+  icon?: string; // e.g. 'moon' | 'dumbbell' | 'footprints' | 'graduation' | 'alert' | 'flame' | 'clock' | 'coffee'
+  isDefault?: boolean;
+}
+
+export interface WeeklyBalanceOption {
+  value: number;
+  label: string;
+  isRecommended?: boolean;
+  desc: string;
+}
+
 export interface UserProfile {
   name: string;
   points: number; // Current spendable balance
@@ -80,6 +96,7 @@ export interface UserProfile {
   soundEnabled: boolean;
   lastSyncTimestamp: number;
   streakDays: number;
+  weeklyTargetPoints?: number; // 200, 500, 1000, 5000, 10000
 }
 
 export interface ActivityLogItem {
@@ -97,7 +114,11 @@ export interface ActivityLogItem {
     | 'quest_edit'
     | 'skill_create'
     | 'skill_edit'
-    | 'skill_delete';
+    | 'skill_delete'
+    | 'penalty_create'
+    | 'penalty_edit'
+    | 'penalty_delete'
+    | 'setting_change';
   title: string;
   details?: string;
   pointsChange: number; // + for earned, - for spent, 0 for info

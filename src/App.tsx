@@ -8,6 +8,7 @@ import {
   FilterOptions,
   QuestRank,
   UserAccount,
+  PenaltyRule,
 } from './types';
 import { DEFAULT_MOODLE_URL, DEFAULT_ICS_DATA, getInitialQuests } from './data/defaultCalendar';
 import { INITIAL_SKILLS } from './data/defaultSkills';
@@ -21,6 +22,7 @@ import {
   getRecurrenceDescription,
   getAstanaDateString,
   getQuestPenaltyPoints,
+  DEFAULT_PENALTY_RULES,
 } from './utils/levelMath';
 import { TopBar } from './components/TopBar';
 import { PlayerHUD } from './components/PlayerHUD';
@@ -72,6 +74,7 @@ const DEFAULT_PROFILE: UserProfile = {
   soundEnabled: true,
   lastSyncTimestamp: Date.now(),
   streakDays: 1,
+  weeklyTargetPoints: 200,
 };
 
 export default function App() {
@@ -127,6 +130,7 @@ export default function App() {
           soundEnabled: parsed.soundEnabled !== undefined ? parsed.soundEnabled : true,
           lastSyncTimestamp: parsed.lastSyncTimestamp || Date.now(),
           streakDays: parsed.streakDays || 1,
+          weeklyTargetPoints: parsed.weeklyTargetPoints || 200,
         };
       }
       return { ...DEFAULT_PROFILE, name: active };
@@ -196,8 +200,24 @@ export default function App() {
   // Navigation Tabs: 'quests' | 'skills' | 'timeline' | 'log'
   const [activeTab, setActiveTab] = useState<'quests' | 'skills' | 'timeline' | 'log'>('quests');
 
+  // Configurable Penalties (per account)
+  const [penalties, setPenalties] = useState<PenaltyRule[]>(() => {
+    const active = localStorage.getItem(STORAGE_KEYS.ACTIVE_USER) || 'Студент';
+    try {
+      const saved = localStorage.getItem(getAccountStorageKey(active, 'penalties'));
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+      return DEFAULT_PENALTY_RULES;
+    } catch {
+      return DEFAULT_PENALTY_RULES;
+    }
+  });
+
   // Modals state
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [syncModalInitialTab, setSyncModalInitialTab] = useState<'balance' | 'url' | 'file' | 'paste'>('balance');
   const [isNewQuestModalOpen, setIsNewQuestModalOpen] = useState(false);
   const [isSpendModalOpen, setIsSpendModalOpen] = useState(false);
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
@@ -264,6 +284,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(getAccountStorageKey(currentUsername, 'logs'), JSON.stringify(logs));
   }, [currentUsername, logs]);
+
+  useEffect(() => {
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'penalties'), JSON.stringify(penalties));
+  }, [currentUsername, penalties]);
 
   // Toggle Dark / Light theme
   const handleToggleTheme = () => {
@@ -610,6 +634,7 @@ export default function App() {
       const dSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'deleted_ids'));
       const lSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'logs'));
       const mSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'moodle_url'));
+      const penSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'penalties'));
 
       setProfile(pSaved ? JSON.parse(pSaved) : { ...DEFAULT_PROFILE, name: cleanNick });
       setSkills(sSaved ? JSON.parse(sSaved) : INITIAL_SKILLS);
@@ -617,6 +642,7 @@ export default function App() {
       setDeletedQuestIds(dSaved ? JSON.parse(dSaved) : []);
       setLogs(lSaved ? JSON.parse(lSaved) : []);
       setMoodleUrl(mSaved || '');
+      setPenalties(penSaved ? JSON.parse(penSaved) : DEFAULT_PENALTY_RULES);
     } catch {
       // fallback
     }
@@ -635,6 +661,7 @@ export default function App() {
     localStorage.setItem(getAccountStorageKey(currentUsername, 'deleted_ids'), JSON.stringify(deletedQuestIds));
     localStorage.setItem(getAccountStorageKey(currentUsername, 'logs'), JSON.stringify(logs));
     localStorage.setItem(getAccountStorageKey(currentUsername, 'moodle_url'), moodleUrl);
+    localStorage.setItem(getAccountStorageKey(currentUsername, 'penalties'), JSON.stringify(penalties));
 
     const newAcc: UserAccount = {
       username: cleanNick,
@@ -671,6 +698,7 @@ export default function App() {
     setDeletedQuestIds([]);
     setLogs(newLogs);
     setMoodleUrl('');
+    setPenalties(DEFAULT_PENALTY_RULES);
 
     // Persist immediately
     localStorage.setItem(getAccountStorageKey(cleanNick, 'profile'), JSON.stringify(newProfile));
@@ -679,8 +707,9 @@ export default function App() {
     localStorage.setItem(getAccountStorageKey(cleanNick, 'deleted_ids'), JSON.stringify([]));
     localStorage.setItem(getAccountStorageKey(cleanNick, 'logs'), JSON.stringify(newLogs));
     localStorage.setItem(getAccountStorageKey(cleanNick, 'moodle_url'), '');
+    localStorage.setItem(getAccountStorageKey(cleanNick, 'penalties'), JSON.stringify(DEFAULT_PENALTY_RULES));
     localStorage.setItem(STORAGE_KEYS.ACTIVE_USER, cleanNick);
-  }, [currentUsername, profile, skills, quests, deletedQuestIds, logs, moodleUrl]);
+  }, [currentUsername, profile, skills, quests, deletedQuestIds, logs, moodleUrl, penalties]);
 
   const handleDeleteAccount = useCallback((username: string) => {
     if (accounts.length <= 1) return;
@@ -692,6 +721,7 @@ export default function App() {
     localStorage.removeItem(getAccountStorageKey(cleanNick, 'deleted_ids'));
     localStorage.removeItem(getAccountStorageKey(cleanNick, 'logs'));
     localStorage.removeItem(getAccountStorageKey(cleanNick, 'moodle_url'));
+    localStorage.removeItem(getAccountStorageKey(cleanNick, 'penalties'));
 
     const remaining = accounts.filter((a) => a.username.toLowerCase() !== cleanNick.toLowerCase());
     setAccounts(remaining);
@@ -818,6 +848,98 @@ export default function App() {
       ...prev,
     ]);
   }, []);
+
+  // Add custom penalty rule
+  const handleAddPenalty = useCallback((newRuleData: Omit<PenaltyRule, 'id'>) => {
+    const newRule: PenaltyRule = {
+      ...newRuleData,
+      id: `penalty-custom-${Date.now()}`,
+    };
+    setPenalties((prev) => [...prev, newRule]);
+    setLogs((prev) => [
+      {
+        id: `log-pen-create-${Date.now()}`,
+        timestamp: Date.now(),
+        type: 'penalty_create',
+        title: `Создано правило штрафа: ${newRule.title}`,
+        details: `Списание: -${newRule.points} б. ${newRule.description || ''}`,
+        pointsChange: 0,
+      },
+      ...prev,
+    ]);
+    triggerPointsToast(0, `Штраф «${newRule.title}» добавлен`, false);
+  }, [triggerPointsToast]);
+
+  // Edit penalty rule
+  const handleEditPenalty = useCallback((updatedRule: PenaltyRule) => {
+    setPenalties((prev) => prev.map((p) => (p.id === updatedRule.id ? updatedRule : p)));
+    setLogs((prev) => [
+      {
+        id: `log-pen-edit-${Date.now()}`,
+        timestamp: Date.now(),
+        type: 'penalty_edit',
+        title: `Изменен штраф: ${updatedRule.title}`,
+        details: `Новое списание: -${updatedRule.points} б.`,
+        pointsChange: 0,
+      },
+      ...prev,
+    ]);
+    triggerPointsToast(0, `Штраф «${updatedRule.title}» обновлен`, false);
+  }, [triggerPointsToast]);
+
+  // Delete penalty rule
+  const handleDeletePenalty = useCallback((ruleId: string) => {
+    setPenalties((prev) => {
+      const target = prev.find((p) => p.id === ruleId);
+      if (target) {
+        setLogs((prevLogs) => [
+          {
+            id: `log-pen-del-${Date.now()}`,
+            timestamp: Date.now(),
+            type: 'penalty_delete',
+            title: `Удален штраф: ${target.title}`,
+            pointsChange: 0,
+          },
+          ...prevLogs,
+        ]);
+      }
+      return prev.filter((p) => p.id !== ruleId);
+    });
+  }, []);
+
+  // Reset penalties to default 4 rules
+  const handleResetPenaltiesToDefault = useCallback(() => {
+    setPenalties(DEFAULT_PENALTY_RULES);
+    setLogs((prev) => [
+      {
+        id: `log-pen-reset-${Date.now()}`,
+        timestamp: Date.now(),
+        type: 'penalty_edit',
+        title: 'Восстановлены стандартные штрафы',
+        details: 'Установлены 4 базовых правила дисциплины',
+        pointsChange: 0,
+      },
+      ...prev,
+    ]);
+    triggerPointsToast(0, 'Стандартные штрафы восстановлены', false);
+  }, [triggerPointsToast]);
+
+  // Update weekly balancing target points (200, 500, 1000, 5000, 10000)
+  const handleUpdateWeeklyTarget = useCallback((newTarget: number) => {
+    setProfile((prev) => ({ ...prev, weeklyTargetPoints: newTarget }));
+    setLogs((prev) => [
+      {
+        id: `log-target-${Date.now()}`,
+        timestamp: Date.now(),
+        type: 'setting_change',
+        title: `Изменена недельная балансировка: ${newTarget} б.`,
+        details: `Рекомендованный объем баллов в неделю установлен на ${newTarget} б.`,
+        pointsChange: 0,
+      },
+      ...prev,
+    ]);
+    triggerPointsToast(0, `Недельная цель: ${newTarget} б.`, false);
+  }, [triggerPointsToast]);
 
   // Synchronize from URL using multi-proxy cascade
   const handleSyncFromUrl = async (url: string): Promise<{ success: boolean; count: number; error?: string }> => {
@@ -1000,7 +1122,10 @@ export default function App() {
         onToggleTheme={handleToggleTheme}
         isSyncing={isSyncing}
         onDirectSync={handleDirectSync}
-        onOpenSyncModal={() => setIsSyncModalOpen(true)}
+        onOpenSyncModal={() => {
+          setSyncModalInitialTab('balance');
+          setIsSyncModalOpen(true);
+        }}
         soundEnabled={profile.soundEnabled}
         onToggleSound={() => setProfile((p) => ({ ...p, soundEnabled: !p.soundEnabled }))}
         points={profile.points}
@@ -1021,6 +1146,10 @@ export default function App() {
           onOpenAccountModal={() => setIsAccountModalOpen(true)}
           onOpenResetModal={() => setIsResetProgressModalOpen(true)}
           onOpenPenaltyModal={() => setIsPenaltyModalOpen(true)}
+          onOpenSettingsModal={() => {
+            setSyncModalInitialTab('balance');
+            setIsSyncModalOpen(true);
+          }}
         />
 
         {/* Tab 1: Quests List */}
@@ -1044,7 +1173,7 @@ export default function App() {
                     </span>
                   </h2>
                   <p className="text-xs text-[var(--text-muted)] mt-0.5">
-                    Сон до 23:00, тренировка, бег и ключевые университетские дедлайны (недельный лимит: ~200 б.)
+                    Сон до 23:00, тренировка, бег и ключевые университетские дедлайны (недельная цель: {profile.weeklyTargetPoints || 200} б.)
                   </p>
                 </div>
 
@@ -1100,53 +1229,6 @@ export default function App() {
                     </div>
                   ))
                 )}
-              </div>
-            </div>
-
-            {/* Quick Moodle Link Status Bar */}
-            <div
-              className="rounded-2xl border p-3.5 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-sm"
-              style={{
-                backgroundColor: 'var(--bg-surface)',
-                borderColor: 'var(--border-subtle)',
-              }}
-            >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div
-                  className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-white shadow-sm"
-                  style={{ backgroundColor: 'var(--accent-primary)' }}
-                >
-                  <Link2 className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="font-semibold text-[var(--text-main)] flex items-center gap-2">
-                    <span>Подключение Moodle:</span>
-                    {moodleUrl ? (
-                      <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                        Ссылка сохранена
-                      </span>
-                    ) : (
-                      <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-slate-500/10 text-[var(--text-muted)] border border-slate-500/20">
-                        Ссылка не настроена
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-[11px] text-[var(--text-muted)] truncate max-w-xs sm:max-w-lg font-mono mt-0.5">
-                    {moodleUrl || 'Нажмите кнопку справа для ввода персональной ссылки Moodle'}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
-                <button
-                  onClick={handleDirectSync}
-                  disabled={isSyncing}
-                  className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-white shadow-sm transition-all active:scale-95 flex items-center gap-1.5 disabled:opacity-75"
-                  style={{ backgroundColor: 'var(--accent-primary)' }}
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>{isSyncing ? 'Синхронизация...' : 'Синхронизировать сейчас'}</span>
-                </button>
               </div>
             </div>
 
@@ -1398,6 +1480,9 @@ export default function App() {
         onImportIcsText={handleImportIcsText}
         onResetToDefault={handleResetToDefault}
         lastSyncTimestamp={profile.lastSyncTimestamp}
+        weeklyTargetPoints={profile.weeklyTargetPoints || 200}
+        onUpdateWeeklyTarget={handleUpdateWeeklyTarget}
+        initialTab={syncModalInitialTab}
       />
 
       <SpendPointsModal
@@ -1444,7 +1529,12 @@ export default function App() {
         isOpen={isPenaltyModalOpen}
         onClose={() => setIsPenaltyModalOpen(false)}
         currentPoints={profile.points}
+        penalties={penalties}
         onApplyPenalty={handleApplyPenalty}
+        onAddPenalty={handleAddPenalty}
+        onEditPenalty={handleEditPenalty}
+        onDeletePenalty={handleDeletePenalty}
+        onResetPenaltiesToDefault={handleResetPenaltiesToDefault}
       />
     </div>
   );
