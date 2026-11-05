@@ -1071,7 +1071,14 @@ export default function App() {
 
   // Today's Agenda Quests (Досуг и задачи на сегодня: Сон до 23:00, Тренировка, Бег, Задание по SDP)
   const todayAgendaQuests = useMemo(() => {
-    return quests.filter((q) => isTaskScheduledForToday(q));
+    return quests
+      .filter((q) => isTaskScheduledForToday(q))
+      .sort((a, b) => {
+        if (a.isCompleted !== b.isCompleted) {
+          return a.isCompleted ? 1 : -1;
+        }
+        return a.deadlineTimestamp - b.deadlineTimestamp;
+      });
   }, [quests]);
 
   // Filtered and sorted quests
@@ -1100,6 +1107,12 @@ export default function App() {
         return true;
       })
       .sort((a, b) => {
+        // Completed quests always go to the bottom
+        if (a.isCompleted !== b.isCompleted) {
+          return a.isCompleted ? 1 : -1;
+        }
+
+        // Within their respective groups, sort by selected criteria
         if (filters.sortBy === 'deadline_asc') return a.deadlineTimestamp - b.deadlineTimestamp;
         if (filters.sortBy === 'deadline_desc') return b.deadlineTimestamp - a.deadlineTimestamp;
         if (filters.sortBy === 'points_desc') {
@@ -1108,7 +1121,7 @@ export default function App() {
           return pB - pA;
         }
         if (filters.sortBy === 'title') return a.cleanTitle.localeCompare(b.cleanTitle);
-        return 0;
+        return a.deadlineTimestamp - b.deadlineTimestamp;
       });
   }, [quests, filters]);
 
