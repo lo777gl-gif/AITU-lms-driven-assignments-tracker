@@ -59,6 +59,7 @@ export interface UserAccount {
   createdAt: number;
   lastLoginAt: number;
   isCloud?: boolean;
+  passwordHash?: string;
 }
 
 export interface Skill {

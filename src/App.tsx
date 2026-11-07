@@ -606,27 +606,93 @@ export default function App() {
     return () => clearInterval(interval);
   }, [checkRecurringRollovers]);
 
+  // Helper: Client-side password hashing (Web Crypto API) for offline & Vercel resilience
+  const hashPasswordClient = async (password: string): Promise<string> => {
+    try {
+      if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle) {
+        const enc = new TextEncoder();
+        const hashBuffer = await window.crypto.subtle.digest('SHA-256', enc.encode(password + '_questlog_salt_v1'));
+        return Array.from(new Uint8Array(hashBuffer))
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('');
+      }
+    } catch {}
+    return btoa(encodeURIComponent(password));
+  };
+
+  // Helper: Safe JSON fetch that never throws JSON.parse errors on HTML or 404 responses
+  const fetchSafeJson = async (
+    url: string,
+    options?: RequestInit
+  ): Promise<{ ok: boolean; status: number; data?: any; error?: string; isHtml?: boolean }> => {
+    try {
+      const resp = await fetch(url, options);
+      const contentType = resp.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        return {
+          ok: false,
+          status: resp.status,
+          isHtml: true,
+          error: resp.status === 404 ? 'Сервер API недоступен (404)' : `Сервер вернул статус ${resp.status}`,
+        };
+      }
+      const json = await resp.json();
+      return {
+        ok: resp.ok && json.ok !== false,
+        status: resp.status,
+        data: json,
+        error: json.error || (resp.ok ? undefined : `Ошибка сервера (${resp.status})`),
+      };
+    } catch (err: any) {
+      return {
+        ok: false,
+        status: 0,
+        error: err.message || 'Ошибка сети',
+      };
+    }
+  };
+
+  // Helper: Load local account storage state
+  const loadLocalAccountData = useCallback((cleanNick: string) => {
+    try {
+      const pSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'profile'));
+      const sSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'skills'));
+      const qSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'quests'));
+      const dSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'deleted_ids'));
+      const lSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'logs'));
+      const mSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'moodle_url'));
+      const penSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'penalties'));
+
+      setProfile(pSaved ? JSON.parse(pSaved) : { ...DEFAULT_PROFILE, name: cleanNick });
+      setSkills(sSaved ? JSON.parse(sSaved) : INITIAL_SKILLS);
+      setQuests(qSaved ? JSON.parse(qSaved) : getInitialQuests());
+      setDeletedQuestIds(dSaved ? JSON.parse(dSaved) : []);
+      setLogs(lSaved ? JSON.parse(lSaved) : []);
+      setMoodleUrl(mSaved || '');
+      setPenalties(penSaved ? JSON.parse(penSaved) : DEFAULT_PENALTY_RULES);
+    } catch {
+      // fallback
+    }
+  }, []);
+
   // Cloud Accounts synchronization
   const fetchCloudAccounts = useCallback(async () => {
     try {
-      const res = await fetch('/api/auth/accounts');
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.accounts)) {
-          setAccounts((prev) => {
-            const map = new Map<string, UserAccount>();
-            prev.forEach((a) => map.set(a.username.toLowerCase(), a));
-            data.accounts.forEach((ca: UserAccount) => {
-              const existing = map.get(ca.username.toLowerCase());
-              map.set(ca.username.toLowerCase(), {
-                ...(existing || {}),
-                ...ca,
-                isCloud: true,
-              });
+      const res = await fetchSafeJson('/api/auth/accounts');
+      if (res.ok && res.data && Array.isArray(res.data.accounts)) {
+        setAccounts((prev) => {
+          const map = new Map<string, UserAccount>();
+          prev.forEach((a) => map.set(a.username.toLowerCase(), a));
+          res.data.accounts.forEach((ca: UserAccount) => {
+            const existing = map.get(ca.username.toLowerCase());
+            map.set(ca.username.toLowerCase(), {
+              ...(existing || {}),
+              ...ca,
+              isCloud: true,
             });
-            return Array.from(map.values());
           });
-        }
+          return Array.from(map.values());
+        });
       }
     } catch {
       // offline fallback
@@ -642,11 +708,10 @@ export default function App() {
     const token = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
     if (!token || !currentUsername) return;
 
-    fetch(`/api/auth/user?username=${encodeURIComponent(currentUsername)}&token=${encodeURIComponent(token)}`)
-      .then((res) => (res.ok ? res.json() : null))
+    fetchSafeJson(`/api/auth/user?username=${encodeURIComponent(currentUsername)}&token=${encodeURIComponent(token)}`)
       .then((resData) => {
-        if (resData && resData.ok && resData.data) {
-          const d = resData.data;
+        if (resData && resData.ok && resData.data?.data) {
+          const d = resData.data.data;
           if (d.profile) setProfile(d.profile);
           if (Array.isArray(d.quests)) setQuests(d.quests);
           if (Array.isArray(d.skills)) setSkills(d.skills);
@@ -665,7 +730,7 @@ export default function App() {
     if (!token || !currentUsername) return;
 
     const timer = setTimeout(() => {
-      fetch('/api/auth/sync', {
+      fetchSafeJson('/api/auth/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -702,38 +767,40 @@ export default function App() {
       localStorage.setItem(getAccountStorageKey(currentUsername, 'moodle_url'), moodleUrl);
       localStorage.setItem(getAccountStorageKey(currentUsername, 'penalties'), JSON.stringify(penalties));
 
-      try {
-        const resp = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: cleanNick, password: password || '' }),
-        });
+      const enteredHash = await hashPasswordClient(password || '');
 
-        const resData = await resp.json();
-        if (!resp.ok || !resData.ok) {
-          return { success: false, error: resData.error || 'Ошибка авторизации' };
+      // 1. Try server/Vercel login
+      const apiRes = await fetchSafeJson('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: cleanNick, password: password || '' }),
+      });
+
+      // If server explicitly returned 401 invalid password
+      if (!apiRes.ok && apiRes.status === 401) {
+        return { success: false, error: apiRes.error || 'Неверный пароль. Попробуйте снова.' };
+      }
+
+      // If server succeeded
+      if (apiRes.ok && apiRes.data) {
+        if (apiRes.data.token) {
+          localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, apiRes.data.token);
         }
 
-        if (resData.token) {
-          localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, resData.token);
-        }
-
-        // Update accounts list
         setAccounts((prev) => {
           const exists = prev.some((a) => a.username.toLowerCase() === cleanNick.toLowerCase());
           if (exists) {
             return prev.map((a) =>
               a.username.toLowerCase() === cleanNick.toLowerCase()
-                ? { ...a, lastLoginAt: Date.now(), isCloud: true }
+                ? { ...a, lastLoginAt: Date.now(), isCloud: true, passwordHash: enteredHash }
                 : a
             );
           }
-          return [{ username: cleanNick, createdAt: Date.now(), lastLoginAt: Date.now(), isCloud: true }, ...prev];
+          return [{ username: cleanNick, createdAt: Date.now(), lastLoginAt: Date.now(), isCloud: true, passwordHash: enteredHash }, ...prev];
         });
 
-        // Hydrate from cloud data if present
-        if (resData.data && Object.keys(resData.data).length > 0) {
-          const d = resData.data;
+        if (apiRes.data.data && Object.keys(apiRes.data.data).length > 0) {
+          const d = apiRes.data.data;
           if (d.profile) setProfile(d.profile);
           if (Array.isArray(d.quests)) setQuests(d.quests);
           if (Array.isArray(d.skills)) setSkills(d.skills);
@@ -742,33 +809,49 @@ export default function App() {
           if (Array.isArray(d.logs)) setLogs(d.logs);
           if (d.moodleUrl !== undefined) setMoodleUrl(d.moodleUrl);
         } else {
-          // Fallback to local storage if brand new
-          const pSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'profile'));
-          const sSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'skills'));
-          const qSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'quests'));
-          const dSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'deleted_ids'));
-          const lSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'logs'));
-          const mSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'moodle_url'));
-          const penSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'penalties'));
-
-          setProfile(pSaved ? JSON.parse(pSaved) : { ...DEFAULT_PROFILE, name: cleanNick });
-          setSkills(sSaved ? JSON.parse(sSaved) : INITIAL_SKILLS);
-          setQuests(qSaved ? JSON.parse(qSaved) : getInitialQuests());
-          setDeletedQuestIds(dSaved ? JSON.parse(dSaved) : []);
-          setLogs(lSaved ? JSON.parse(lSaved) : []);
-          setMoodleUrl(mSaved || '');
-          setPenalties(penSaved ? JSON.parse(penSaved) : DEFAULT_PENALTY_RULES);
+          loadLocalAccountData(cleanNick);
         }
 
         setCurrentUsername(cleanNick);
         localStorage.setItem(STORAGE_KEYS.ACTIVE_USER, cleanNick);
         triggerPointsToast(0, `Вход выполнен! Аккаунт «${cleanNick}» синхронизирован`, false);
         return { success: true };
-      } catch (err: any) {
-        return { success: false, error: err.message || 'Ошибка соединения с сервером' };
       }
+
+      // If server returned non-JSON / 404 (e.g. static hosting on Vercel or offline):
+      // Verify credentials locally!
+      const localAccount = accounts.find((a) => a.username.toLowerCase() === cleanNick.toLowerCase());
+      const storedHash = localStorage.getItem(getAccountStorageKey(cleanNick, 'pwd_hash')) || localAccount?.passwordHash;
+
+      if (!localAccount && !storedHash) {
+        return {
+          success: false,
+          error: `Аккаунт «${cleanNick}» не найден. Зарегистрируйтесь, если у вас еще нет аккаунта.`,
+        };
+      }
+
+      if (storedHash && storedHash !== enteredHash) {
+        return {
+          success: false,
+          error: 'Неверный пароль. Попробуйте снова.',
+        };
+      }
+
+      setAccounts((prev) =>
+        prev.map((a) =>
+          a.username.toLowerCase() === cleanNick.toLowerCase()
+            ? { ...a, lastLoginAt: Date.now(), passwordHash: enteredHash }
+            : a
+        )
+      );
+
+      loadLocalAccountData(cleanNick);
+      setCurrentUsername(cleanNick);
+      localStorage.setItem(STORAGE_KEYS.ACTIVE_USER, cleanNick);
+      triggerPointsToast(0, `Вход выполнен! Аккаунт «${cleanNick}» активен`, false);
+      return { success: true };
     },
-    [currentUsername, profile, skills, quests, deletedQuestIds, logs, moodleUrl, penalties, triggerPointsToast]
+    [accounts, currentUsername, profile, skills, quests, deletedQuestIds, logs, moodleUrl, penalties, triggerPointsToast, loadLocalAccountData]
   );
 
   const handleCreateAccount = useCallback(
@@ -797,77 +880,88 @@ export default function App() {
           timestamp: Date.now(),
           type: 'sync',
           title: `Создан аккаунт «${cleanNick}»`,
-          details: 'Успешная регистрация с паролем. Включена облачная синхронизация между устройствами.',
+          details: 'Успешная регистрация с паролем. Включено сохранение прогресса.',
           pointsChange: 0,
         },
       ];
 
-      try {
-        const resp = await fetch('/api/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: cleanNick,
-            password: password || '',
-            initialData: {
-              profile: newProfile,
-              skills: newSkills,
-              quests: newQuests,
-              penalties: DEFAULT_PENALTY_RULES,
-              deletedQuestIds: [],
-              logs: newLogs,
-              moodleUrl: '',
-            },
-          }),
-        });
+      const clientHash = await hashPasswordClient(password || '');
 
-        const resData = await resp.json();
-        if (!resp.ok || !resData.ok) {
-          return { success: false, error: resData.error || 'Ошибка регистрации' };
-        }
-
-        if (resData.token) {
-          localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, resData.token);
-        }
-
-        const newAcc: UserAccount = {
+      // 1. Try server/Vercel registration
+      const apiRes = await fetchSafeJson('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           username: cleanNick,
-          createdAt: Date.now(),
-          lastLoginAt: Date.now(),
-          isCloud: true,
-        };
+          password: password || '',
+          initialData: {
+            profile: newProfile,
+            skills: newSkills,
+            quests: newQuests,
+            penalties: DEFAULT_PENALTY_RULES,
+            deletedQuestIds: [],
+            logs: newLogs,
+            moodleUrl: '',
+          },
+        }),
+      });
 
-        setAccounts((prev) => {
-          const filtered = prev.filter((a) => a.username.toLowerCase() !== cleanNick.toLowerCase());
-          return [newAcc, ...filtered];
-        });
-
-        setCurrentUsername(cleanNick);
-        setProfile(newProfile);
-        setQuests(newQuests);
-        setSkills(newSkills);
-        setDeletedQuestIds([]);
-        setLogs(newLogs);
-        setMoodleUrl('');
-        setPenalties(DEFAULT_PENALTY_RULES);
-
-        // Persist locally
-        localStorage.setItem(getAccountStorageKey(cleanNick, 'profile'), JSON.stringify(newProfile));
-        localStorage.setItem(getAccountStorageKey(cleanNick, 'skills'), JSON.stringify(newSkills));
-        localStorage.setItem(getAccountStorageKey(cleanNick, 'quests'), JSON.stringify(newQuests));
-        localStorage.setItem(getAccountStorageKey(cleanNick, 'deleted_ids'), JSON.stringify([]));
-        localStorage.setItem(getAccountStorageKey(cleanNick, 'logs'), JSON.stringify(newLogs));
-        localStorage.setItem(getAccountStorageKey(cleanNick, 'moodle_url'), '');
-        localStorage.setItem(getAccountStorageKey(cleanNick, 'penalties'), JSON.stringify(DEFAULT_PENALTY_RULES));
-        localStorage.setItem(STORAGE_KEYS.ACTIVE_USER, cleanNick);
-
-        triggerPointsToast(0, `Аккаунт «${cleanNick}» создан и синхронизирован!`, false);
-        return { success: true };
-      } catch (err: any) {
-        return { success: false, error: err.message || 'Ошибка соединения с сервером' };
+      // If server explicitly returned validation conflict error (409)
+      if (!apiRes.ok && !apiRes.isHtml && apiRes.status === 409) {
+        return { success: false, error: apiRes.error || `Аккаунт с ником «${cleanNick}» уже существует` };
       }
+
+      if (apiRes.ok && apiRes.data?.token) {
+        localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, apiRes.data.token);
+      }
+
+      const isCloudSuccess = apiRes.ok;
+
+      // Check if user already exists locally if server was unreachable
+      if (!isCloudSuccess) {
+        const localExists = accounts.some((a) => a.username.toLowerCase() === cleanNick.toLowerCase());
+        if (localExists) {
+          return { success: false, error: `Аккаунт с ником «${cleanNick}» уже существует на этом устройстве. Войдите с паролем.` };
+        }
+      }
+
+      const newAcc: UserAccount = {
+        username: cleanNick,
+        createdAt: Date.now(),
+        lastLoginAt: Date.now(),
+        isCloud: isCloudSuccess,
+        passwordHash: clientHash,
+      };
+
+      setAccounts((prev) => {
+        const filtered = prev.filter((a) => a.username.toLowerCase() !== cleanNick.toLowerCase());
+        return [newAcc, ...filtered];
+      });
+
+      setCurrentUsername(cleanNick);
+      setProfile(newProfile);
+      setQuests(newQuests);
+      setSkills(newSkills);
+      setDeletedQuestIds([]);
+      setLogs(newLogs);
+      setMoodleUrl('');
+      setPenalties(DEFAULT_PENALTY_RULES);
+
+      // Persist locally
+      localStorage.setItem(getAccountStorageKey(cleanNick, 'profile'), JSON.stringify(newProfile));
+      localStorage.setItem(getAccountStorageKey(cleanNick, 'skills'), JSON.stringify(newSkills));
+      localStorage.setItem(getAccountStorageKey(cleanNick, 'quests'), JSON.stringify(newQuests));
+      localStorage.setItem(getAccountStorageKey(cleanNick, 'deleted_ids'), JSON.stringify([]));
+      localStorage.setItem(getAccountStorageKey(cleanNick, 'logs'), JSON.stringify(newLogs));
+      localStorage.setItem(getAccountStorageKey(cleanNick, 'moodle_url'), '');
+      localStorage.setItem(getAccountStorageKey(cleanNick, 'penalties'), JSON.stringify(DEFAULT_PENALTY_RULES));
+      localStorage.setItem(getAccountStorageKey(cleanNick, 'pwd_hash'), clientHash);
+      localStorage.setItem(STORAGE_KEYS.ACTIVE_USER, cleanNick);
+
+      triggerPointsToast(0, isCloudSuccess ? `Аккаунт «${cleanNick}» создан и синхронизирован!` : `Аккаунт «${cleanNick}» успешно создан!`, false);
+      return { success: true };
     },
-    [currentUsername, profile, skills, quests, deletedQuestIds, logs, moodleUrl, penalties, triggerPointsToast]
+    [accounts, currentUsername, profile, skills, quests, deletedQuestIds, logs, moodleUrl, penalties, triggerPointsToast]
   );
 
   const handleDeleteAccount = useCallback(
@@ -882,9 +976,10 @@ export default function App() {
       localStorage.removeItem(getAccountStorageKey(cleanNick, 'logs'));
       localStorage.removeItem(getAccountStorageKey(cleanNick, 'moodle_url'));
       localStorage.removeItem(getAccountStorageKey(cleanNick, 'penalties'));
+      localStorage.removeItem(getAccountStorageKey(cleanNick, 'pwd_hash'));
 
       try {
-        await fetch('/api/auth/delete', {
+        await fetchSafeJson('/api/auth/delete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username: cleanNick }),
