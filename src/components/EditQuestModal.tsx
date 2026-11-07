@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Quest, Skill, QuestRank, RecurrenceType } from '../types';
-import { QUEST_RANKS, RANK_LIST, WEEKDAYS, RECURRENCE_OPTIONS } from '../utils/levelMath';
+import { QUEST_RANKS, RANK_LIST, WEEKDAYS, RECURRENCE_OPTIONS, getRankPointsForTarget } from '../utils/levelMath';
 import {
   timestampToDateTimeLocal,
   dateTimeLocalToTimestamp,
@@ -15,6 +15,7 @@ interface EditQuestModalProps {
   skills: Skill[];
   onSaveQuest: (updatedQuest: Quest) => void;
   onDeleteQuest: (questId: string) => void;
+  weeklyTargetPoints?: number;
 }
 
 export const EditQuestModal: React.FC<EditQuestModalProps> = ({
@@ -24,6 +25,7 @@ export const EditQuestModal: React.FC<EditQuestModalProps> = ({
   skills,
   onSaveQuest,
   onDeleteQuest,
+  weeklyTargetPoints = 200,
 }) => {
   const [title, setTitle] = useState('');
   const [courseName, setCourseName] = useState('');
@@ -46,7 +48,7 @@ export const EditQuestModal: React.FC<EditQuestModalProps> = ({
       setDescription(quest.description || '');
       setDeadlineStr(timestampToDateTimeLocal(quest.deadlineTimestamp));
       setDifficulty(quest.difficulty || 'A');
-      setPoints(quest.points || QUEST_RANKS[quest.difficulty || 'A']?.points || 40);
+      setPoints(quest.points || getRankPointsForTarget(quest.difficulty || 'A', weeklyTargetPoints));
       setLinkedSkillId(quest.linkedSkillId || '');
       setIsRecurring(Boolean(quest.isRecurring));
       setRecurrenceType(quest.recurrenceType || 'daily');
@@ -55,13 +57,13 @@ export const EditQuestModal: React.FC<EditQuestModalProps> = ({
       setRecurrenceTime(quest.recurrenceTime || '23:00');
       setShowConfirmDelete(false);
     }
-  }, [quest, skills]);
+  }, [quest, skills, weeklyTargetPoints]);
 
   if (!isOpen || !quest) return null;
 
   const handleDifficultyChange = (rank: QuestRank) => {
     setDifficulty(rank);
-    setPoints(QUEST_RANKS[rank]?.points || 40);
+    setPoints(getRankPointsForTarget(rank, weeklyTargetPoints));
   };
 
   const toggleWeekday = (dayId: number) => {
@@ -218,13 +220,14 @@ export const EditQuestModal: React.FC<EditQuestModalProps> = ({
             <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
               {RANK_LIST.map((rank) => {
                 const info = QUEST_RANKS[rank];
+                const scaledPoints = getRankPointsForTarget(rank, weeklyTargetPoints);
                 const isSelected = difficulty === rank;
                 return (
                   <button
                     key={rank}
                     type="button"
                     onClick={() => handleDifficultyChange(rank)}
-                    className={`py-2 rounded-xl border flex flex-col items-center justify-center transition-all ${
+                    className={`py-2 rounded-xl border flex flex-col items-center justify-center transition-all cursor-pointer ${
                       isSelected ? 'ring-2 ring-offset-1 ring-[var(--accent-primary)] scale-[1.03]' : 'opacity-75 hover:opacity-100'
                     }`}
                     style={{
@@ -234,7 +237,7 @@ export const EditQuestModal: React.FC<EditQuestModalProps> = ({
                     }}
                   >
                     <span className="font-mono font-bold text-xs sm:text-sm">{rank}</span>
-                    <span className="text-[10px] mt-0.5 opacity-90">{info.points} б.</span>
+                    <span className="text-[10px] mt-0.5 opacity-90 font-mono font-semibold">{scaledPoints} б.</span>
                   </button>
                 );
               })}
@@ -249,14 +252,14 @@ export const EditQuestModal: React.FC<EditQuestModalProps> = ({
             <input
               type="number"
               min={1}
-              max={200}
+              max={Math.max(500, weeklyTargetPoints * 2)}
               value={points}
               onChange={(e) => setPoints(Number(e.target.value))}
               className="w-24 px-3 py-1 rounded-xl text-xs font-mono font-bold border bg-transparent text-[var(--text-main)] focus:outline-none"
               style={{ borderColor: 'var(--border-subtle)' }}
             />
-            <span className="text-xs text-[var(--text-muted)]">
-              (Рекомендуемый баланс в неделю: ~200 баллов)
+            <span className="text-xs text-[var(--text-muted)] font-mono">
+              (Недельная цель: {weeklyTargetPoints} б.)
             </span>
           </div>
 

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Skill, Quest, QuestRank, RecurrenceType } from '../types';
 import { formatToAstanaTime, timestampToDateTimeLocal, dateTimeLocalToTimestamp } from '../utils/icsParser';
-import { QUEST_RANKS, RANK_LIST, WEEKDAYS, RECURRENCE_OPTIONS } from '../utils/levelMath';
+import { QUEST_RANKS, RANK_LIST, WEEKDAYS, RECURRENCE_OPTIONS, getRankPointsForTarget } from '../utils/levelMath';
 import { Plus, X, Repeat, Calendar, Check, Sparkles } from 'lucide-react';
 
 interface CustomQuestModalProps {
@@ -9,6 +9,7 @@ interface CustomQuestModalProps {
   onClose: () => void;
   skills: Skill[];
   onCreateQuest: (quest: Quest) => void;
+  weeklyTargetPoints?: number;
 }
 
 export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
@@ -16,6 +17,7 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
   onClose,
   skills,
   onCreateQuest,
+  weeklyTargetPoints = 200,
 }) => {
   const [title, setTitle] = useState('');
   const [courseName, setCourseName] = useState('Самостоятельная работа');
@@ -27,18 +29,23 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
   });
   const [linkedSkillId, setLinkedSkillId] = useState<string>('');
   const [difficulty, setDifficulty] = useState<QuestRank>('A');
-  const [points, setPoints] = useState<number>(40);
+  const [points, setPoints] = useState<number>(() => getRankPointsForTarget('A', weeklyTargetPoints));
   const [isRecurring, setIsRecurring] = useState(false);
   const [recurrenceType, setRecurrenceType] = useState<RecurrenceType>('daily');
   const [recurrenceDays, setRecurrenceDays] = useState<number>(3);
   const [recurrenceWeekdays, setRecurrenceWeekdays] = useState<number[]>([1, 2, 3, 4, 5]);
   const [recurrenceTime, setRecurrenceTime] = useState<string>('23:00');
 
+  // Keep points synchronized with weekly target points when modal is opened or target changes
+  React.useEffect(() => {
+    setPoints(getRankPointsForTarget(difficulty, weeklyTargetPoints));
+  }, [difficulty, weeklyTargetPoints]);
+
   if (!isOpen) return null;
 
   const handleDifficultyChange = (rank: QuestRank) => {
     setDifficulty(rank);
-    setPoints(QUEST_RANKS[rank]?.points || 40);
+    setPoints(getRankPointsForTarget(rank, weeklyTargetPoints));
   };
 
   const toggleWeekday = (dayId: number) => {
@@ -57,7 +64,7 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
       setCourseName('Режим дня');
       setDescription('Лечь спать вовремя для полноценного сна и ясного ума');
       setDifficulty('F');
-      setPoints(5);
+      setPoints(getRankPointsForTarget('F', weeklyTargetPoints));
       setIsRecurring(true);
       setRecurrenceType('daily');
       setRecurrenceTime('23:00');
@@ -66,7 +73,7 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
       setCourseName('Спорт и здоровье');
       setDescription('Зарядка, ОФП или разминка 20-30 минут');
       setDifficulty('F');
-      setPoints(5);
+      setPoints(getRankPointsForTarget('F', weeklyTargetPoints));
       setIsRecurring(true);
       setRecurrenceType('weekdays');
       setRecurrenceWeekdays([1, 2, 3, 4, 5]);
@@ -76,7 +83,7 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
       setCourseName('Спорт и здоровье');
       setDescription('Кардио-пробежка на свежем воздухе');
       setDifficulty('F');
-      setPoints(5);
+      setPoints(getRankPointsForTarget('F', weeklyTargetPoints));
       setIsRecurring(true);
       setRecurrenceType('weekdays');
       setRecurrenceWeekdays([1, 3, 5]);
@@ -86,7 +93,7 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
       setCourseName('Software Design Patterns');
       setDescription('Сложное задание: архитектурные паттерны и реализация');
       setDifficulty('S');
-      setPoints(45);
+      setPoints(getRankPointsForTarget('S', weeklyTargetPoints));
       setIsRecurring(false);
     }
   };
@@ -178,34 +185,34 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
             <button
               type="button"
               onClick={() => applyPreset('sleep')}
-              className="px-2.5 py-1 rounded-lg text-xs font-medium border text-[var(--text-main)] hover:border-[var(--accent-primary)] hover:bg-[var(--bg-surface-hover)] transition-all"
+              className="px-2.5 py-1 rounded-lg text-xs font-medium border text-[var(--text-main)] hover:border-[var(--accent-primary)] hover:bg-[var(--bg-surface-hover)] transition-all cursor-pointer"
               style={{ borderColor: 'var(--border-subtle)' }}
             >
-              🌙 Сон до 23:00 (5 б.)
+              🌙 Сон до 23:00 ({getRankPointsForTarget('F', weeklyTargetPoints)} б.)
             </button>
             <button
               type="button"
               onClick={() => applyPreset('workout')}
-              className="px-2.5 py-1 rounded-lg text-xs font-medium border text-[var(--text-main)] hover:border-[var(--accent-primary)] hover:bg-[var(--bg-surface-hover)] transition-all"
+              className="px-2.5 py-1 rounded-lg text-xs font-medium border text-[var(--text-main)] hover:border-[var(--accent-primary)] hover:bg-[var(--bg-surface-hover)] transition-all cursor-pointer"
               style={{ borderColor: 'var(--border-subtle)' }}
             >
-              🏋️ Тренировка (Пн-Пт, 5 б.)
+              🏋️ Тренировка ({getRankPointsForTarget('F', weeklyTargetPoints)} б.)
             </button>
             <button
               type="button"
               onClick={() => applyPreset('running')}
-              className="px-2.5 py-1 rounded-lg text-xs font-medium border text-[var(--text-main)] hover:border-[var(--accent-primary)] hover:bg-[var(--bg-surface-hover)] transition-all"
+              className="px-2.5 py-1 rounded-lg text-xs font-medium border text-[var(--text-main)] hover:border-[var(--accent-primary)] hover:bg-[var(--bg-surface-hover)] transition-all cursor-pointer"
               style={{ borderColor: 'var(--border-subtle)' }}
             >
-              🏃 Бег (Пн, Ср, Пт, 5 б.)
+              🏃 Бег ({getRankPointsForTarget('F', weeklyTargetPoints)} б.)
             </button>
             <button
               type="button"
               onClick={() => applyPreset('sdp')}
-              className="px-2.5 py-1 rounded-lg text-xs font-medium border text-[var(--text-main)] hover:border-[var(--accent-primary)] hover:bg-[var(--bg-surface-hover)] transition-all"
+              className="px-2.5 py-1 rounded-lg text-xs font-medium border text-[var(--text-main)] hover:border-[var(--accent-primary)] hover:bg-[var(--bg-surface-hover)] transition-all cursor-pointer"
               style={{ borderColor: 'var(--border-subtle)' }}
             >
-              💻 Задание по SDP (45 б.)
+              💻 Задание по SDP ({getRankPointsForTarget('S', weeklyTargetPoints)} б.)
             </button>
           </div>
         </div>
@@ -287,13 +294,14 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
             <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
               {RANK_LIST.map((rank) => {
                 const info = QUEST_RANKS[rank];
+                const scaledPoints = getRankPointsForTarget(rank, weeklyTargetPoints);
                 const isSelected = difficulty === rank;
                 return (
                   <button
                     key={rank}
                     type="button"
                     onClick={() => handleDifficultyChange(rank)}
-                    className={`py-2 rounded-xl border flex flex-col items-center justify-center transition-all ${
+                    className={`py-2 rounded-xl border flex flex-col items-center justify-center transition-all cursor-pointer ${
                       isSelected ? 'ring-2 ring-offset-1 ring-[var(--accent-primary)] scale-[1.03]' : 'opacity-75 hover:opacity-100'
                     }`}
                     style={{
@@ -303,7 +311,7 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
                     }}
                   >
                     <span className="font-mono font-bold text-xs sm:text-sm">{rank}</span>
-                    <span className="text-[10px] mt-0.5 opacity-90">{info.points} б.</span>
+                    <span className="text-[10px] mt-0.5 opacity-90 font-mono font-semibold">{scaledPoints} б.</span>
                   </button>
                 );
               })}
@@ -318,14 +326,14 @@ export const CustomQuestModal: React.FC<CustomQuestModalProps> = ({
             <input
               type="number"
               min={1}
-              max={200}
+              max={Math.max(500, weeklyTargetPoints * 2)}
               value={points}
               onChange={(e) => setPoints(Number(e.target.value))}
               className="w-24 px-3 py-1 rounded-xl text-xs font-mono font-bold border bg-transparent text-[var(--text-main)] focus:outline-none"
               style={{ borderColor: 'var(--border-subtle)' }}
             />
-            <span className="text-xs text-[var(--text-muted)]">
-              (Недельный лимит: ~200 б.)
+            <span className="text-xs text-[var(--text-muted)] font-mono">
+              (Недельная цель: {weeklyTargetPoints} б.)
             </span>
           </div>
 

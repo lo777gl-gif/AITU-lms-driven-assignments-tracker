@@ -58,6 +58,7 @@ export interface UserAccount {
   username: string; // Nickname / login
   createdAt: number;
   lastLoginAt: number;
+  isCloud?: boolean;
 }
 
 export interface Skill {
@@ -96,7 +97,7 @@ export interface UserProfile {
   soundEnabled: boolean;
   lastSyncTimestamp: number;
   streakDays: number;
-  weeklyTargetPoints?: number; // 200, 500, 1000, 5000, 10000
+  weeklyTargetPoints?: number; // 200, 400, 600, 1000, 5000, 10000
 }
 
 export interface ActivityLogItem {

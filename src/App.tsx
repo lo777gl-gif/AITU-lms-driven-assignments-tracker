@@ -23,6 +23,7 @@ import {
   getAstanaDateString,
   getQuestPenaltyPoints,
   DEFAULT_PENALTY_RULES,
+  getRankPointsForTarget,
 } from './utils/levelMath';
 import { TopBar } from './components/TopBar';
 import { PlayerHUD } from './components/PlayerHUD';
@@ -57,6 +58,7 @@ const STORAGE_KEYS = {
   THEME: 'questlog_theme',
   ACCOUNTS_LIST: 'questlog_accounts_v1',
   ACTIVE_USER: 'questlog_active_user_v1',
+  AUTH_TOKEN: 'questlog_auth_token_v1',
 };
 
 const getAccountStorageKey = (username: string, key: string) => {
@@ -604,132 +606,300 @@ export default function App() {
     return () => clearInterval(interval);
   }, [checkRecurringRollovers]);
 
-  // Account switching and creation helpers
-  const handleSelectAccount = useCallback((username: string) => {
-    const cleanNick = username.trim();
-    if (!cleanNick) return;
-
-    // Flush current state to storage before switching
-    localStorage.setItem(getAccountStorageKey(currentUsername, 'profile'), JSON.stringify(profile));
-    localStorage.setItem(getAccountStorageKey(currentUsername, 'skills'), JSON.stringify(skills));
-    localStorage.setItem(getAccountStorageKey(currentUsername, 'quests'), JSON.stringify(quests));
-    localStorage.setItem(getAccountStorageKey(currentUsername, 'deleted_ids'), JSON.stringify(deletedQuestIds));
-    localStorage.setItem(getAccountStorageKey(currentUsername, 'logs'), JSON.stringify(logs));
-    localStorage.setItem(getAccountStorageKey(currentUsername, 'moodle_url'), moodleUrl);
-
-    // Update lastLoginAt
-    setAccounts((prev) =>
-      prev.map((a) =>
-        a.username.toLowerCase() === cleanNick.toLowerCase()
-          ? { ...a, lastLoginAt: Date.now() }
-          : a
-      )
-    );
-
-    // Load data for selected user
+  // Cloud Accounts synchronization
+  const fetchCloudAccounts = useCallback(async () => {
     try {
-      const pSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'profile'));
-      const sSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'skills'));
-      const qSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'quests'));
-      const dSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'deleted_ids'));
-      const lSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'logs'));
-      const mSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'moodle_url'));
-      const penSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'penalties'));
-
-      setProfile(pSaved ? JSON.parse(pSaved) : { ...DEFAULT_PROFILE, name: cleanNick });
-      setSkills(sSaved ? JSON.parse(sSaved) : INITIAL_SKILLS);
-      setQuests(qSaved ? JSON.parse(qSaved) : getInitialQuests());
-      setDeletedQuestIds(dSaved ? JSON.parse(dSaved) : []);
-      setLogs(lSaved ? JSON.parse(lSaved) : []);
-      setMoodleUrl(mSaved || '');
-      setPenalties(penSaved ? JSON.parse(penSaved) : DEFAULT_PENALTY_RULES);
+      const res = await fetch('/api/auth/accounts');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.accounts)) {
+          setAccounts((prev) => {
+            const map = new Map<string, UserAccount>();
+            prev.forEach((a) => map.set(a.username.toLowerCase(), a));
+            data.accounts.forEach((ca: UserAccount) => {
+              const existing = map.get(ca.username.toLowerCase());
+              map.set(ca.username.toLowerCase(), {
+                ...(existing || {}),
+                ...ca,
+                isCloud: true,
+              });
+            });
+            return Array.from(map.values());
+          });
+        }
+      }
     } catch {
-      // fallback
+      // offline fallback
     }
+  }, []);
 
-    setCurrentUsername(cleanNick);
-  }, [currentUsername, profile, skills, quests, deletedQuestIds, logs, moodleUrl]);
+  useEffect(() => {
+    fetchCloudAccounts();
+  }, [fetchCloudAccounts]);
 
-  const handleCreateAccount = useCallback((username: string) => {
-    const cleanNick = username.trim();
-    if (!cleanNick) return;
+  // Pull latest cloud data for active user if session token exists
+  useEffect(() => {
+    const token = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    if (!token || !currentUsername) return;
 
-    // Flush current state before creating
-    localStorage.setItem(getAccountStorageKey(currentUsername, 'profile'), JSON.stringify(profile));
-    localStorage.setItem(getAccountStorageKey(currentUsername, 'skills'), JSON.stringify(skills));
-    localStorage.setItem(getAccountStorageKey(currentUsername, 'quests'), JSON.stringify(quests));
-    localStorage.setItem(getAccountStorageKey(currentUsername, 'deleted_ids'), JSON.stringify(deletedQuestIds));
-    localStorage.setItem(getAccountStorageKey(currentUsername, 'logs'), JSON.stringify(logs));
-    localStorage.setItem(getAccountStorageKey(currentUsername, 'moodle_url'), moodleUrl);
-    localStorage.setItem(getAccountStorageKey(currentUsername, 'penalties'), JSON.stringify(penalties));
+    fetch(`/api/auth/user?username=${encodeURIComponent(currentUsername)}&token=${encodeURIComponent(token)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((resData) => {
+        if (resData && resData.ok && resData.data) {
+          const d = resData.data;
+          if (d.profile) setProfile(d.profile);
+          if (Array.isArray(d.quests)) setQuests(d.quests);
+          if (Array.isArray(d.skills)) setSkills(d.skills);
+          if (Array.isArray(d.penalties)) setPenalties(d.penalties);
+          if (Array.isArray(d.deletedQuestIds)) setDeletedQuestIds(d.deletedQuestIds);
+          if (Array.isArray(d.logs)) setLogs(d.logs);
+          if (d.moodleUrl !== undefined) setMoodleUrl(d.moodleUrl);
+        }
+      })
+      .catch(() => {});
+  }, [currentUsername]);
 
-    const newAcc: UserAccount = {
-      username: cleanNick,
-      createdAt: Date.now(),
-      lastLoginAt: Date.now(),
-    };
+  // Debounced cloud synchronization across devices
+  useEffect(() => {
+    const token = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    if (!token || !currentUsername) return;
 
-    setAccounts((prev) => {
-      const filtered = prev.filter((a) => a.username.toLowerCase() !== cleanNick.toLowerCase());
-      return [newAcc, ...filtered];
-    });
+    const timer = setTimeout(() => {
+      fetch('/api/auth/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: currentUsername,
+          token,
+          data: {
+            profile,
+            skills,
+            quests,
+            penalties,
+            deletedQuestIds,
+            logs,
+            moodleUrl,
+          },
+        }),
+      }).catch(() => {});
+    }, 1500);
 
-    const newProfile: UserProfile = {
-      ...DEFAULT_PROFILE,
-      name: cleanNick,
-    };
-    const newQuests = getInitialQuests();
-    const newSkills = INITIAL_SKILLS;
-    const newLogs: ActivityLogItem[] = [
-      {
-        id: `log-create-acc-${Date.now()}`,
-        timestamp: Date.now(),
-        type: 'sync',
-        title: `Создан аккаунт «${cleanNick}»`,
-        details: 'Успешная регистрация по никнейму. Балансировка: до 200 баллов/неделя.',
-        pointsChange: 0,
-      },
-    ];
+    return () => clearTimeout(timer);
+  }, [currentUsername, profile, skills, quests, penalties, deletedQuestIds, logs, moodleUrl]);
 
-    setCurrentUsername(cleanNick);
-    setProfile(newProfile);
-    setQuests(newQuests);
-    setSkills(newSkills);
-    setDeletedQuestIds([]);
-    setLogs(newLogs);
-    setMoodleUrl('');
-    setPenalties(DEFAULT_PENALTY_RULES);
+  // Account switching and creation helpers with password authentication
+  const handleSelectAccount = useCallback(
+    async (username: string, password?: string): Promise<{ success: boolean; error?: string }> => {
+      const cleanNick = username.trim();
+      if (!cleanNick) return { success: false, error: 'Введите никнейм' };
 
-    // Persist immediately
-    localStorage.setItem(getAccountStorageKey(cleanNick, 'profile'), JSON.stringify(newProfile));
-    localStorage.setItem(getAccountStorageKey(cleanNick, 'skills'), JSON.stringify(newSkills));
-    localStorage.setItem(getAccountStorageKey(cleanNick, 'quests'), JSON.stringify(newQuests));
-    localStorage.setItem(getAccountStorageKey(cleanNick, 'deleted_ids'), JSON.stringify([]));
-    localStorage.setItem(getAccountStorageKey(cleanNick, 'logs'), JSON.stringify(newLogs));
-    localStorage.setItem(getAccountStorageKey(cleanNick, 'moodle_url'), '');
-    localStorage.setItem(getAccountStorageKey(cleanNick, 'penalties'), JSON.stringify(DEFAULT_PENALTY_RULES));
-    localStorage.setItem(STORAGE_KEYS.ACTIVE_USER, cleanNick);
-  }, [currentUsername, profile, skills, quests, deletedQuestIds, logs, moodleUrl, penalties]);
+      // Flush current state to local storage before switching
+      localStorage.setItem(getAccountStorageKey(currentUsername, 'profile'), JSON.stringify(profile));
+      localStorage.setItem(getAccountStorageKey(currentUsername, 'skills'), JSON.stringify(skills));
+      localStorage.setItem(getAccountStorageKey(currentUsername, 'quests'), JSON.stringify(quests));
+      localStorage.setItem(getAccountStorageKey(currentUsername, 'deleted_ids'), JSON.stringify(deletedQuestIds));
+      localStorage.setItem(getAccountStorageKey(currentUsername, 'logs'), JSON.stringify(logs));
+      localStorage.setItem(getAccountStorageKey(currentUsername, 'moodle_url'), moodleUrl);
+      localStorage.setItem(getAccountStorageKey(currentUsername, 'penalties'), JSON.stringify(penalties));
 
-  const handleDeleteAccount = useCallback((username: string) => {
-    if (accounts.length <= 1) return;
-    const cleanNick = username.trim();
+      try {
+        const resp = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: cleanNick, password: password || '' }),
+        });
 
-    localStorage.removeItem(getAccountStorageKey(cleanNick, 'profile'));
-    localStorage.removeItem(getAccountStorageKey(cleanNick, 'skills'));
-    localStorage.removeItem(getAccountStorageKey(cleanNick, 'quests'));
-    localStorage.removeItem(getAccountStorageKey(cleanNick, 'deleted_ids'));
-    localStorage.removeItem(getAccountStorageKey(cleanNick, 'logs'));
-    localStorage.removeItem(getAccountStorageKey(cleanNick, 'moodle_url'));
-    localStorage.removeItem(getAccountStorageKey(cleanNick, 'penalties'));
+        const resData = await resp.json();
+        if (!resp.ok || !resData.ok) {
+          return { success: false, error: resData.error || 'Ошибка авторизации' };
+        }
 
-    const remaining = accounts.filter((a) => a.username.toLowerCase() !== cleanNick.toLowerCase());
-    setAccounts(remaining);
+        if (resData.token) {
+          localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, resData.token);
+        }
 
-    if (currentUsername.toLowerCase() === cleanNick.toLowerCase() && remaining.length > 0) {
-      handleSelectAccount(remaining[0].username);
-    }
-  }, [accounts, currentUsername, handleSelectAccount]);
+        // Update accounts list
+        setAccounts((prev) => {
+          const exists = prev.some((a) => a.username.toLowerCase() === cleanNick.toLowerCase());
+          if (exists) {
+            return prev.map((a) =>
+              a.username.toLowerCase() === cleanNick.toLowerCase()
+                ? { ...a, lastLoginAt: Date.now(), isCloud: true }
+                : a
+            );
+          }
+          return [{ username: cleanNick, createdAt: Date.now(), lastLoginAt: Date.now(), isCloud: true }, ...prev];
+        });
+
+        // Hydrate from cloud data if present
+        if (resData.data && Object.keys(resData.data).length > 0) {
+          const d = resData.data;
+          if (d.profile) setProfile(d.profile);
+          if (Array.isArray(d.quests)) setQuests(d.quests);
+          if (Array.isArray(d.skills)) setSkills(d.skills);
+          if (Array.isArray(d.penalties)) setPenalties(d.penalties);
+          if (Array.isArray(d.deletedQuestIds)) setDeletedQuestIds(d.deletedQuestIds);
+          if (Array.isArray(d.logs)) setLogs(d.logs);
+          if (d.moodleUrl !== undefined) setMoodleUrl(d.moodleUrl);
+        } else {
+          // Fallback to local storage if brand new
+          const pSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'profile'));
+          const sSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'skills'));
+          const qSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'quests'));
+          const dSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'deleted_ids'));
+          const lSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'logs'));
+          const mSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'moodle_url'));
+          const penSaved = localStorage.getItem(getAccountStorageKey(cleanNick, 'penalties'));
+
+          setProfile(pSaved ? JSON.parse(pSaved) : { ...DEFAULT_PROFILE, name: cleanNick });
+          setSkills(sSaved ? JSON.parse(sSaved) : INITIAL_SKILLS);
+          setQuests(qSaved ? JSON.parse(qSaved) : getInitialQuests());
+          setDeletedQuestIds(dSaved ? JSON.parse(dSaved) : []);
+          setLogs(lSaved ? JSON.parse(lSaved) : []);
+          setMoodleUrl(mSaved || '');
+          setPenalties(penSaved ? JSON.parse(penSaved) : DEFAULT_PENALTY_RULES);
+        }
+
+        setCurrentUsername(cleanNick);
+        localStorage.setItem(STORAGE_KEYS.ACTIVE_USER, cleanNick);
+        triggerPointsToast(0, `Вход выполнен! Аккаунт «${cleanNick}» синхронизирован`, false);
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message || 'Ошибка соединения с сервером' };
+      }
+    },
+    [currentUsername, profile, skills, quests, deletedQuestIds, logs, moodleUrl, penalties, triggerPointsToast]
+  );
+
+  const handleCreateAccount = useCallback(
+    async (username: string, password?: string): Promise<{ success: boolean; error?: string }> => {
+      const cleanNick = username.trim();
+      if (!cleanNick) return { success: false, error: 'Введите никнейм' };
+
+      // Flush current state before creating
+      localStorage.setItem(getAccountStorageKey(currentUsername, 'profile'), JSON.stringify(profile));
+      localStorage.setItem(getAccountStorageKey(currentUsername, 'skills'), JSON.stringify(skills));
+      localStorage.setItem(getAccountStorageKey(currentUsername, 'quests'), JSON.stringify(quests));
+      localStorage.setItem(getAccountStorageKey(currentUsername, 'deleted_ids'), JSON.stringify(deletedQuestIds));
+      localStorage.setItem(getAccountStorageKey(currentUsername, 'logs'), JSON.stringify(logs));
+      localStorage.setItem(getAccountStorageKey(currentUsername, 'moodle_url'), moodleUrl);
+      localStorage.setItem(getAccountStorageKey(currentUsername, 'penalties'), JSON.stringify(penalties));
+
+      const newProfile: UserProfile = {
+        ...DEFAULT_PROFILE,
+        name: cleanNick,
+      };
+      const newQuests = getInitialQuests();
+      const newSkills = INITIAL_SKILLS;
+      const newLogs: ActivityLogItem[] = [
+        {
+          id: `log-create-acc-${Date.now()}`,
+          timestamp: Date.now(),
+          type: 'sync',
+          title: `Создан аккаунт «${cleanNick}»`,
+          details: 'Успешная регистрация с паролем. Включена облачная синхронизация между устройствами.',
+          pointsChange: 0,
+        },
+      ];
+
+      try {
+        const resp = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: cleanNick,
+            password: password || '',
+            initialData: {
+              profile: newProfile,
+              skills: newSkills,
+              quests: newQuests,
+              penalties: DEFAULT_PENALTY_RULES,
+              deletedQuestIds: [],
+              logs: newLogs,
+              moodleUrl: '',
+            },
+          }),
+        });
+
+        const resData = await resp.json();
+        if (!resp.ok || !resData.ok) {
+          return { success: false, error: resData.error || 'Ошибка регистрации' };
+        }
+
+        if (resData.token) {
+          localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, resData.token);
+        }
+
+        const newAcc: UserAccount = {
+          username: cleanNick,
+          createdAt: Date.now(),
+          lastLoginAt: Date.now(),
+          isCloud: true,
+        };
+
+        setAccounts((prev) => {
+          const filtered = prev.filter((a) => a.username.toLowerCase() !== cleanNick.toLowerCase());
+          return [newAcc, ...filtered];
+        });
+
+        setCurrentUsername(cleanNick);
+        setProfile(newProfile);
+        setQuests(newQuests);
+        setSkills(newSkills);
+        setDeletedQuestIds([]);
+        setLogs(newLogs);
+        setMoodleUrl('');
+        setPenalties(DEFAULT_PENALTY_RULES);
+
+        // Persist locally
+        localStorage.setItem(getAccountStorageKey(cleanNick, 'profile'), JSON.stringify(newProfile));
+        localStorage.setItem(getAccountStorageKey(cleanNick, 'skills'), JSON.stringify(newSkills));
+        localStorage.setItem(getAccountStorageKey(cleanNick, 'quests'), JSON.stringify(newQuests));
+        localStorage.setItem(getAccountStorageKey(cleanNick, 'deleted_ids'), JSON.stringify([]));
+        localStorage.setItem(getAccountStorageKey(cleanNick, 'logs'), JSON.stringify(newLogs));
+        localStorage.setItem(getAccountStorageKey(cleanNick, 'moodle_url'), '');
+        localStorage.setItem(getAccountStorageKey(cleanNick, 'penalties'), JSON.stringify(DEFAULT_PENALTY_RULES));
+        localStorage.setItem(STORAGE_KEYS.ACTIVE_USER, cleanNick);
+
+        triggerPointsToast(0, `Аккаунт «${cleanNick}» создан и синхронизирован!`, false);
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message || 'Ошибка соединения с сервером' };
+      }
+    },
+    [currentUsername, profile, skills, quests, deletedQuestIds, logs, moodleUrl, penalties, triggerPointsToast]
+  );
+
+  const handleDeleteAccount = useCallback(
+    async (username: string) => {
+      if (accounts.length <= 1) return;
+      const cleanNick = username.trim();
+
+      localStorage.removeItem(getAccountStorageKey(cleanNick, 'profile'));
+      localStorage.removeItem(getAccountStorageKey(cleanNick, 'skills'));
+      localStorage.removeItem(getAccountStorageKey(cleanNick, 'quests'));
+      localStorage.removeItem(getAccountStorageKey(cleanNick, 'deleted_ids'));
+      localStorage.removeItem(getAccountStorageKey(cleanNick, 'logs'));
+      localStorage.removeItem(getAccountStorageKey(cleanNick, 'moodle_url'));
+      localStorage.removeItem(getAccountStorageKey(cleanNick, 'penalties'));
+
+      try {
+        await fetch('/api/auth/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: cleanNick }),
+        });
+      } catch {}
+
+      const remaining = accounts.filter((a) => a.username.toLowerCase() !== cleanNick.toLowerCase());
+      setAccounts(remaining);
+
+      if (currentUsername.toLowerCase() === cleanNick.toLowerCase() && remaining.length > 0) {
+        handleSelectAccount(remaining[0].username);
+      }
+    },
+    [accounts, currentUsername, handleSelectAccount]
+  );
 
   // Save edited quest (modifies all parameters: title, deadline, course, points, difficulty, recurring)
   const handleSaveEditedQuest = useCallback((updatedQuest: Quest) => {
@@ -924,21 +1094,39 @@ export default function App() {
     triggerPointsToast(0, 'Стандартные штрафы восстановлены', false);
   }, [triggerPointsToast]);
 
-  // Update weekly balancing target points (200, 500, 1000, 5000, 10000)
+  // Update weekly balancing target points (200, 400, 600, 1000, 5000, 10000)
   const handleUpdateWeeklyTarget = useCallback((newTarget: number) => {
     setProfile((prev) => ({ ...prev, weeklyTargetPoints: newTarget }));
+
+    // Scale rewards immediately ONLY for active (uncompleted) quests!
+    // Already completed quests remain untouched with their historical points.
+    setQuests((prevQuests) =>
+      prevQuests.map((q) => {
+        if (q.isCompleted) {
+          return q;
+        }
+        const scaled = getRankPointsForTarget(q.difficulty || 'B', newTarget);
+        return {
+          ...q,
+          points: scaled,
+          baseExp: scaled,
+        };
+      })
+    );
+
+    const sRankReward = getRankPointsForTarget('S', newTarget);
     setLogs((prev) => [
       {
         id: `log-target-${Date.now()}`,
         timestamp: Date.now(),
         type: 'setting_change',
         title: `Изменена недельная балансировка: ${newTarget} б.`,
-        details: `Рекомендованный объем баллов в неделю установлен на ${newTarget} б.`,
+        details: `Рекомендованный объем: ${newTarget} б./нед. Награды активных квестов обновлены (Ранг S: ${sRankReward} б.). Завершенные задачи сохранены без изменений.`,
         pointsChange: 0,
       },
       ...prev,
     ]);
-    triggerPointsToast(0, `Недельная цель: ${newTarget} б.`, false);
+    triggerPointsToast(0, `Недельная цель: ${newTarget} б. Награды обновлены`, false);
   }, [triggerPointsToast]);
 
   // Synchronize from URL using multi-proxy cascade
@@ -1512,6 +1700,7 @@ export default function App() {
         skills={skills}
         onSaveQuest={handleSaveEditedQuest}
         onDeleteQuest={handleDeleteQuest}
+        weeklyTargetPoints={profile.weeklyTargetPoints || 200}
       />
 
       <CustomQuestModal
@@ -1519,6 +1708,7 @@ export default function App() {
         onClose={() => setIsNewQuestModalOpen(false)}
         skills={skills}
         onCreateQuest={handleCreateCustomQuest}
+        weeklyTargetPoints={profile.weeklyTargetPoints || 200}
       />
 
       <AccountModal
@@ -1529,6 +1719,7 @@ export default function App() {
         onSelectAccount={handleSelectAccount}
         onCreateAccount={handleCreateAccount}
         onDeleteAccount={handleDeleteAccount}
+        onRefreshCloudAccounts={fetchCloudAccounts}
       />
 
       <ResetProgressModal
