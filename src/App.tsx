@@ -561,7 +561,113 @@ export default function App() {
     triggerPointsToast(0, 'Прогресс полностью обнулен', false);
   }, [triggerPointsToast]);
 
-  // Automatically rollover completed recurring tasks when their scheduled time/date arrives
+  // Mark quest as failed (deducts penalty and advances cycle for recurring, sinks to bottom for regular)
+  const handleFailQuest = useCallback(
+    (questId: string) => {
+      const now = Date.now();
+      const todayDateStr = getAstanaDateString(now);
+
+      const target = quests.find((q) => q.id === questId);
+      if (!target) return;
+
+      if (target.isRecurring) {
+        const penaltyPoints = getQuestPenaltyPoints(target);
+        soundEffects.playPenaltySound();
+        triggerPointsToast(penaltyPoints, `Штраф: ${target.cleanTitle} не выполнено`, true);
+
+        const nextTimestamp = getNextRecurringDeadline(
+          now,
+          target.recurrenceType || 'daily',
+          target.recurrenceDays || 1,
+          target.recurrenceWeekdays || [1, 2, 3, 4, 5],
+          target.recurrenceTime || '23:00'
+        );
+
+        setProfile((prev) => ({
+          ...prev,
+          points: Math.max(0, prev.points - penaltyPoints),
+          totalPenalties: (prev.totalPenalties || 0) + penaltyPoints,
+        }));
+
+        setQuests((prev) =>
+          prev.map((q) => {
+            if (q.id !== questId) return q;
+            return {
+              ...q,
+              isCompleted: false,
+              isFailed: true,
+              failedAt: new Date().toISOString(),
+              failedCount: (q.failedCount || 0) + 1,
+              lastCompletedDate: todayDateStr,
+              nextScheduledDate: nextTimestamp,
+            };
+          })
+        );
+
+        setLogs((prevLogs) => [
+          {
+            id: `log-fail-rec-${Date.now()}`,
+            timestamp: Date.now(),
+            type: 'penalty',
+            title: `Не выполнено (штраф): ${target.cleanTitle}`,
+            details: `Списано -${penaltyPoints} б. Цикл обновлен до следующего расписания (${formatToAstanaTime(nextTimestamp)}).`,
+            pointsChange: -penaltyPoints,
+          },
+          ...prevLogs,
+        ]);
+      } else {
+        // Standard regular quest: mark failed and sink to bottom
+        soundEffects.playPenaltySound();
+        triggerPointsToast(0, `Задание «${target.cleanTitle}» помечено как невыполненное`, true);
+
+        setQuests((prev) =>
+          prev.map((q) => {
+            if (q.id !== questId) return q;
+            return {
+              ...q,
+              isFailed: true,
+              failedAt: new Date().toISOString(),
+            };
+          })
+        );
+
+        setLogs((prevLogs) => [
+          {
+            id: `log-fail-${Date.now()}`,
+            timestamp: Date.now(),
+            type: 'quest_fail',
+            title: `Не выполнено: ${target.cleanTitle}`,
+            details: `Задание помечено как невыполненное и перемещено вниз списка`,
+            pointsChange: 0,
+          },
+          ...prevLogs,
+        ]);
+      }
+    },
+    [quests, triggerPointsToast]
+  );
+
+  // Undo fail state / restore quest to active work
+  const handleUnfailQuest = useCallback(
+    (questId: string) => {
+      setQuests((prev) =>
+        prev.map((q) => {
+          if (q.id !== questId) return q;
+          return {
+            ...q,
+            isFailed: false,
+            failedAt: undefined,
+            lastCompletedDate: undefined,
+            nextScheduledDate: undefined,
+          };
+        })
+      );
+      triggerPointsToast(0, 'Задание возвращено в активную работу', false);
+    },
+    [triggerPointsToast]
+  );
+
+  // Automatically rollover completed or failed recurring tasks when their scheduled time/date arrives
   const checkRecurringRollovers = useCallback(() => {
     const now = Date.now();
     const todayDateStr = getAstanaDateString(now);
@@ -569,28 +675,21 @@ export default function App() {
     setQuests((prevQuests) => {
       let hasChanges = false;
       const updated = prevQuests.map((q) => {
-        if (q.isRecurring && q.isCompleted) {
+        if (q.isRecurring && (q.isCompleted || q.isFailed)) {
           const isDueForReset = q.nextScheduledDate
             ? now >= q.nextScheduledDate
             : todayDateStr !== q.lastCompletedDate;
 
           if (isDueForReset) {
             hasChanges = true;
-            const newDeadline =
-              q.nextScheduledDate ||
-              getNextRecurringDeadline(
-                q.deadlineTimestamp,
-                q.recurrenceType || 'daily',
-                q.recurrenceDays || 1,
-                q.recurrenceWeekdays || [1, 2, 3, 4, 5],
-                q.recurrenceTime || '23:00'
-              );
             return {
               ...q,
               isCompleted: false,
-              deadlineTimestamp: newDeadline,
-              localDeadline: formatToAstanaTime(newDeadline),
+              isFailed: false,
+              deadlineTimestamp: 0,
+              localDeadline: '',
               nextScheduledDate: undefined,
+              lastCompletedDate: undefined,
             };
           }
         }
@@ -844,6 +943,9 @@ export default function App() {
             : a
         )
       );
+
+      // Save password hash for future logins if it was a legacy account
+      localStorage.setItem(getAccountStorageKey(cleanNick, 'pwd_hash'), enteredHash);
 
       loadLocalAccountData(cleanNick);
       setCurrentUsername(cleanNick);
@@ -1357,10 +1459,12 @@ export default function App() {
     return quests
       .filter((q) => isTaskScheduledForToday(q))
       .sort((a, b) => {
-        if (a.isCompleted !== b.isCompleted) {
-          return a.isCompleted ? 1 : -1;
+        const aIsClosed = Boolean(a.isCompleted || a.isFailed);
+        const bIsClosed = Boolean(b.isCompleted || b.isFailed);
+        if (aIsClosed !== bIsClosed) {
+          return aIsClosed ? 1 : -1;
         }
-        return a.deadlineTimestamp - b.deadlineTimestamp;
+        return (a.deadlineTimestamp || 0) - (b.deadlineTimestamp || 0);
       });
   }, [quests]);
 
@@ -1381,7 +1485,7 @@ export default function App() {
         if (filters.status === 'active' && (status === 'completed' || status === 'failed')) return false;
         if (filters.status === 'burning' && status !== 'burning') return false;
         if (filters.status === 'completed' && status !== 'completed') return false;
-        if (filters.status === 'failed' && status !== 'failed') return false;
+        if (filters.status === 'failed' && (status !== 'failed' && !q.isFailed)) return false;
 
         if (filters.course !== 'all' && q.courseName !== filters.course) return false;
         if (filters.skill !== 'all' && q.linkedSkillId !== filters.skill) return false;
@@ -1390,21 +1494,32 @@ export default function App() {
         return true;
       })
       .sort((a, b) => {
-        // Completed quests always go to the bottom
-        if (a.isCompleted !== b.isCompleted) {
-          return a.isCompleted ? 1 : -1;
+        // Completed AND Failed quests always sink to the bottom
+        const aIsClosed = Boolean(a.isCompleted || a.isFailed);
+        const bIsClosed = Boolean(b.isCompleted || b.isFailed);
+        if (aIsClosed !== bIsClosed) {
+          return aIsClosed ? 1 : -1;
+        }
+
+        // If both are closed, group completed then failed
+        if (aIsClosed && bIsClosed) {
+          if (Boolean(a.isFailed) !== Boolean(b.isFailed)) {
+            return a.isFailed ? 1 : -1;
+          }
         }
 
         // Within their respective groups, sort by selected criteria
-        if (filters.sortBy === 'deadline_asc') return a.deadlineTimestamp - b.deadlineTimestamp;
-        if (filters.sortBy === 'deadline_desc') return b.deadlineTimestamp - a.deadlineTimestamp;
+        const timeA = a.deadlineTimestamp || 0;
+        const timeB = b.deadlineTimestamp || 0;
+        if (filters.sortBy === 'deadline_asc') return timeA - timeB;
+        if (filters.sortBy === 'deadline_desc') return timeB - timeA;
         if (filters.sortBy === 'points_desc') {
           const pA = a.points || 0;
           const pB = b.points || 0;
           return pB - pA;
         }
         if (filters.sortBy === 'title') return a.cleanTitle.localeCompare(b.cleanTitle);
-        return a.deadlineTimestamp - b.deadlineTimestamp;
+        return timeA - timeB;
       });
   }, [quests, filters]);
 
@@ -1611,6 +1726,17 @@ export default function App() {
                   >
                     Сдано
                   </button>
+
+                  <button
+                    onClick={() => setFilters((f) => ({ ...f, status: 'failed' }))}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap ${
+                      filters.status === 'failed'
+                        ? 'bg-red-600 text-white shadow-sm'
+                        : 'text-red-500 hover:text-red-400'
+                    }`}
+                  >
+                    Не выполнено {quests.some((q) => q.isFailed) && `(${quests.filter((q) => q.isFailed).length})`}
+                  </button>
                 </div>
               </div>
 
@@ -1709,6 +1835,8 @@ export default function App() {
                     onDeleteQuest={handleDeleteQuest}
                     onOpenEditModal={(q) => setEditingQuest(q)}
                     onApplyPenalty={handleQuestPenalty}
+                    onFailQuest={handleFailQuest}
+                    onUnfailQuest={handleUnfailQuest}
                   />
                 ))}
               </div>

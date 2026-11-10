@@ -50,8 +50,11 @@ export interface Quest {
   // Daily agenda flag
   isTodayAgenda?: boolean;
 
-  // Penalty tracking
+  // Penalty & Failure tracking
   isPenalized?: boolean;
+  isFailed?: boolean;
+  failedAt?: string;
+  failedCount?: number;
 }
 
 export interface UserAccount {
@@ -107,6 +110,7 @@ export interface ActivityLogItem {
   type:
     | 'quest_complete'
     | 'quest_uncomplete'
+    | 'quest_fail'
     | 'penalty'
     | 'reset_progress'
     | 'points_spend'

@@ -194,11 +194,11 @@ export function getNextRecurringDeadline(
  * Проверяет, актуальна ли задача в плане на сегодня («Досуг дня / Задачи на сегодня»):
  */
 export function isTaskScheduledForToday(quest: Quest, nowTimestamp = Date.now()): boolean {
-  if (quest.isCompleted) return false;
+  if (quest.isCompleted || quest.isFailed) return false;
 
   const todayStr = getAstanaDateString(nowTimestamp);
 
-  // Если задание уже выполнено сегодня в этом цикле — не выводим его в активные на сегодня
+  // Если задание уже выполнено или провалено сегодня в этом цикле — не выводим его в активные на сегодня
   if (quest.lastCompletedDate === todayStr) {
     return false;
   }
@@ -223,12 +223,18 @@ export function isTaskScheduledForToday(quest: Quest, nowTimestamp = Date.now())
       return days.includes(todayIso);
     }
     if (recType === 'interval_days') {
+      if (!quest.deadlineTimestamp || quest.deadlineTimestamp === 0) return true;
       const deadlineDate = getAstanaDateString(quest.deadlineTimestamp);
       return todayStr === deadlineDate || quest.deadlineTimestamp <= nowTimestamp;
     }
+    return true;
   }
 
   // 2. Обычные университетские дедлайны:
+  if (!quest.deadlineTimestamp || quest.deadlineTimestamp <= 0) {
+    return false;
+  }
+
   const deadlineDate = getAstanaDateString(quest.deadlineTimestamp);
   const isToday = todayStr === deadlineDate;
   const isWithin48h =

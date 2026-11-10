@@ -327,9 +327,11 @@ export function parseMoodleIcs(
  */
 export function getQuestStatus(quest: Quest): QuestStatus {
   if (quest.isCompleted) return 'completed';
+  if (quest.isFailed) return 'failed';
+  if (quest.isRecurring) return 'active';
   const now = Date.now();
-  if (quest.deadlineTimestamp < now) return 'failed';
-  if (quest.deadlineTimestamp - now < 48 * 3600 * 1000) return 'burning';
+  if (quest.deadlineTimestamp && quest.deadlineTimestamp > 0 && quest.deadlineTimestamp < now) return 'failed';
+  if (quest.deadlineTimestamp && quest.deadlineTimestamp > 0 && quest.deadlineTimestamp - now < 48 * 3600 * 1000) return 'burning';
   return 'active';
 }
 

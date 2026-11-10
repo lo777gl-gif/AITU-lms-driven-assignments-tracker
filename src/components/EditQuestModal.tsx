@@ -79,7 +79,7 @@ export const EditQuestModal: React.FC<EditQuestModalProps> = ({
     e.preventDefault();
     if (!title.trim()) return;
 
-    const newTimestamp = dateTimeLocalToTimestamp(deadlineStr);
+    const newTimestamp = isRecurring ? 0 : dateTimeLocalToTimestamp(deadlineStr);
     const updated: Quest = {
       ...quest,
       cleanTitle: title.trim(),
@@ -87,8 +87,8 @@ export const EditQuestModal: React.FC<EditQuestModalProps> = ({
       courseName: courseName.trim() || 'Общее',
       description: description.trim(),
       deadlineTimestamp: newTimestamp,
-      dtEnd: new Date(newTimestamp).toISOString(),
-      localDeadline: formatToAstanaTime(newTimestamp),
+      dtEnd: isRecurring ? '' : new Date(newTimestamp).toISOString(),
+      localDeadline: isRecurring ? '' : formatToAstanaTime(newTimestamp),
       difficulty,
       points: Math.max(5, points),
       baseExp: Math.max(5, points),
@@ -196,21 +196,37 @@ export const EditQuestModal: React.FC<EditQuestModalProps> = ({
             </div>
           </div>
 
-          {/* Deadline Picker */}
-          <div>
-            <label className="block text-xs font-semibold text-[var(--text-main)] mb-1 flex items-center gap-1.5">
-              <Calendar className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
-              <span>Дедлайн / Время выполнения (Астана, UTC+5) *</span>
-            </label>
-            <input
-              type="datetime-local"
-              required
-              value={deadlineStr}
-              onChange={(e) => setDeadlineStr(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl text-xs sm:text-sm border bg-transparent text-[var(--text-main)] font-mono focus:outline-none"
-              style={{ borderColor: 'var(--border-subtle)' }}
-            />
-          </div>
+          {/* Deadline Picker - only for non-recurring quests */}
+          {!isRecurring ? (
+            <div>
+              <label className="block text-xs font-semibold text-[var(--text-main)] mb-1 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                <span>Дедлайн / Время выполнения (Астана, UTC+5) *</span>
+              </label>
+              <input
+                type="datetime-local"
+                required={!isRecurring}
+                value={deadlineStr}
+                onChange={(e) => setDeadlineStr(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl text-xs sm:text-sm border bg-transparent text-[var(--text-main)] font-mono focus:outline-none"
+                style={{ borderColor: 'var(--border-subtle)' }}
+              />
+            </div>
+          ) : (
+            <div
+              className="px-3.5 py-2.5 rounded-xl border text-xs flex items-center gap-2"
+              style={{
+                backgroundColor: 'rgba(147, 51, 234, 0.08)',
+                borderColor: 'rgba(147, 51, 234, 0.25)',
+                color: 'var(--text-main)',
+              }}
+            >
+              <Repeat className="w-4 h-4 text-purple-500 shrink-0" />
+              <span>
+                <strong>Повторяющийся квест:</strong> постоянный дедлайн отключен. Задание обновляется по расписанию в <strong>{recurrenceTime}</strong>.
+              </span>
+            </div>
+          )}
 
           {/* Difficulty & Points */}
           <div>
